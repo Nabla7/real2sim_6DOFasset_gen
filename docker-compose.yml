@@ -1,0 +1,66 @@
+# Spatial Memory Service - Docker Compose
+#
+# Usage:
+#   docker-compose up --build
+#
+# Requirements:
+#   - NVIDIA GPU with Docker GPU support
+#   - Weights directory with SAM3, SAM3D, and FoundationPose checkpoints
+#
+# Set WEIGHTS_PATH environment variable to your weights directory:
+#   WEIGHTS_PATH=/path/to/perception_model_weights docker-compose up
+
+version: "3.8"
+
+services:
+  spatial-memory:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spatial-memory-service
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "8080:8080"   # Gateway
+      - "8091:8091"   # SAM3 (for debugging)
+      - "8092:8092"   # SAM3D (for debugging)
+      - "8093:8093"   # FoundationPose (for debugging)
+    volumes:
+      # Mount weights directory
+      - ${WEIGHTS_PATH:-./weights}:/weights:ro
+      # Mount third-party code (for development)
+      - ${SAM3_PATH:-./third_party/sam3}:/app/third_party/sam3:ro
+      - ${SAM3D_PATH:-./third_party/sam-3d-objects}:/app/third_party/sam-3d-objects:ro
+      - ${FOUNDATIONPOSE_PATH:-./third_party/FoundationPose}:/app/third_party/FoundationPose:ro
+      # Persist mesh outputs
+      - spatial-memory-meshes:/tmp/spatial_memory/meshes
+      # Persist logs
+      - spatial-memory-logs:/tmp/spatial_memory/logs
+    environment:
+      - WEIGHTS_DIR=/weights
+      - MESH_OUTPUT_DIR=/tmp/spatial_memory/meshes
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      # Pipeline timeouts (seconds)
+      - SAM3_TIMEOUT=60
+      - SAM3D_TIMEOUT=300
+      - FOUNDATIONPOSE_TIMEOUT=120
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
+volumes:
+  spatial-memory-meshes:
+  spatial-memory-logs:
+
+

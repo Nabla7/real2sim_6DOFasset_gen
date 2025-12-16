@@ -1,0 +1,201 @@
+# Production Spatial Memory Service Docker Image
+# Tested on NVIDIA A100 80GB with CUDA 12.8 driver
+#
+# Build:
+#   docker build -f Dockerfile.production -t spatial-memory-service:production .
+#
+# Run:
+#   docker run --gpus all -p 8080:8080 -v /path/to/weights:/weights spatial-memory-service:production
+
+FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# ============================================
+# System Dependencies
+# ============================================
+RUN apt-get update && apt-get install -y \
+    # Build tools
+    wget \
+    curl \
+    git \
+    build-essential \
+    cmake \
+    ninja-build \
+    # Compilers (GCC-11 for CUDA 11.8 compatibility)
+    gcc-11 \
+    g++-11 \
+    # Libraries for vision/graphics
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    # Eigen (for FoundationPose)
+    libeigen3-dev \
+    # Boost (for FoundationPose)
+    libboost-all-dev \
+    # Process management
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set GCC-11 as default for CUDA compilation
+ENV CC=/usr/bin/gcc-11
+ENV CXX=/usr/bin/g++-11
+ENV CUDAHOSTCXX=/usr/bin/g++-11
+
+# ============================================
+# CUDA Toolkit 11.8 (for FoundationPose compatibility)
+# ============================================
+RUN wget -q https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run && \
+    chmod +x cuda_11.8.0_520.61.05_linux.run && \
+    ./cuda_11.8.0_520.61.05_linux.run --toolkit --silent --override && \
+    rm cuda_11.8.0_520.61.05_linux.run
+
+# Both CUDA versions available
+ENV CUDA_HOME=/usr/local/cuda-11.8
+ENV PATH=$CUDA_HOME/bin:/usr/local/cuda-12.1/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH
+
+# ============================================
+# Miniconda + Mamba
+# ============================================
+ENV CONDA_DIR=/opt/conda
+RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh && \
+    /bin/bash ~/miniconda.sh -b -p $CONDA_DIR && \
+    rm ~/miniconda.sh
+ENV PATH=$CONDA_DIR/bin:$PATH
+
+RUN conda init bash && \
+    conda install -n base -c conda-forge mamba -y && \
+    conda clean -afy
+
+# ============================================
+# Clone Third-Party Repositories
+# ============================================
+WORKDIR /app/third_party
+
+# SAM3
+RUN git clone https://github.com/facebookresearch/sam3.git && \
+    cd sam3 && \
+    git checkout main
+
+# SAM3D Objects
+RUN git clone https://github.com/facebookresearch/sam-3d-objects.git && \
+    cd sam-3d-objects && \
+    git checkout main
+
+# FoundationPose
+RUN git clone https://github.com/NVlabs/FoundationPose.git && \
+    cd FoundationPose && \
+    git checkout main
+
+# ============================================
+# Application Code
+# ============================================
+WORKDIR /app
+COPY requirements/ /app/requirements/
+COPY gateway/ /app/gateway/
+COPY sam3_service/ /app/sam3_service/
+COPY sam3d_service/ /app/sam3d_service/
+COPY foundationpose_service/ /app/foundationpose_service/
+COPY scripts/ /app/scripts/
+
+RUN chmod +x /app/scripts/*.sh
+
+# ============================================
+# Environment 1: Gateway (CPU, lightweight)
+# ============================================
+RUN mamba create -n gateway python=3.11 -y && \
+    mamba run -n gateway pip install --no-cache-dir -r /app/requirements/gateway.txt && \
+    mamba clean -afy
+
+# ============================================
+# Environment 2: SAM3 (Python 3.12, PyTorch 2.7, CUDA 12.6)
+# ============================================
+RUN mamba create -n sam3 python=3.12 -y && \
+    mamba run -n sam3 pip install --no-cache-dir \
+        torch==2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126 && \
+    mamba run -n sam3 pip install --no-cache-dir -r /app/requirements/sam3.txt && \
+    mamba run -n sam3 bash -c "cd /app/third_party/sam3 && pip install -e ." && \
+    mamba clean -afy
+
+# ============================================
+# Environment 3: SAM3D (Python 3.11, heavy dependencies)
+# ============================================
+WORKDIR /app/third_party/sam-3d-objects
+RUN mamba env create -f environments/default.yml && \
+    mamba clean -afy
+
+RUN eval "$(mamba shell hook --shell bash)" && \
+    mamba activate sam3d-objects && \
+    export PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121" && \
+    pip install --no-cache-dir -e '.[dev]' && \
+    pip install --no-cache-dir -e '.[p3d]' && \
+    export PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html" && \
+    pip install --no-cache-dir -e '.[inference]' && \
+    chmod +x ./patching/hydra && ./patching/hydra && \
+    pip install --no-cache-dir fastapi uvicorn pydantic
+
+# ============================================
+# Environment 4: FoundationPose (Python 3.9, C++ extensions)
+# ============================================
+WORKDIR /app/third_party/FoundationPose
+
+RUN mamba create -n foundationpose python=3.9 -y && \
+    mamba run -n foundationpose conda install -c conda-forge eigen=3.4.0 -y && \
+    mamba clean -afy
+
+# Install Python dependencies
+RUN mamba run -n foundationpose pip install --no-cache-dir \
+    torch==2.0.0+cu118 torchvision==0.15.1+cu118 --index-url https://download.pytorch.org/whl/cu118 && \
+    mamba run -n foundationpose pip install --no-cache-dir -r requirements.txt && \
+    mamba run -n foundationpose pip install --no-cache-dir fastapi uvicorn pydantic
+
+# Install additional dependencies
+RUN mamba run -n foundationpose pip install --no-cache-dir --no-build-isolation \
+    git+https://github.com/NVlabs/nvdiffrast.git && \
+    mamba run -n foundationpose pip install --no-cache-dir \
+    kaolin==0.15.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.0.0_cu118.html && \
+    mamba run -n foundationpose pip install --no-cache-dir \
+    pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py39_cu118_pyt200/download.html
+
+# Build C++ extensions
+RUN eval "$(mamba shell hook --shell bash)" && \
+    mamba activate foundationpose && \
+    export CMAKE_PREFIX_PATH=$CONDA_PREFIX/lib/python3.9/site-packages/pybind11/share/cmake/pybind11 && \
+    export CUDA_HOME=/usr/local/cuda-11.8 && \
+    export PATH=$CUDA_HOME/bin:$PATH && \
+    export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH && \
+    cd mycpp && rm -rf build && mkdir -p build && cd build && cmake .. && make -j$(nproc) && cd ../.. && \
+    cd bundlesdf/mycuda && rm -rf build *egg* *.so && python setup.py build_ext --inplace && cd ../..
+
+# ============================================
+# Final Setup
+# ============================================
+WORKDIR /app
+
+# Create output directories
+RUN mkdir -p /tmp/spatial_memory/meshes /tmp/spatial_memory/logs
+
+# Environment variables
+ENV WEIGHTS_DIR=/weights
+ENV MESH_OUTPUT_DIR=/tmp/spatial_memory/meshes
+ENV PYTHONPATH=/app:/app/third_party
+
+# Supervisor configuration
+COPY scripts/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Expose ports
+EXPOSE 8080 8091 8092 8093
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start all services via supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+

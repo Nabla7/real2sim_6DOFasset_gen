@@ -1,0 +1,69 @@
+# Production Docker Compose for Spatial Memory Service
+#
+# Usage:
+#   export WEIGHTS_PATH=/path/to/perception_model_weights
+#   docker-compose -f docker-compose.production.yml up -d
+#
+# Stop:
+#   docker-compose -f docker-compose.production.yml down
+#
+# View logs:
+#   docker-compose -f docker-compose.production.yml logs -f
+
+version: "3.8"
+
+services:
+  spatial-memory:
+    image: spatial-memory-service:latest
+    container_name: spatial-memory-production
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "8080:8080"   # Gateway (main API endpoint)
+      # Optional: expose individual services for debugging
+      # - "8091:8091"   # SAM3
+      # - "8092:8092"   # SAM3D
+      # - "8093:8093"   # FoundationPose
+    volumes:
+      # Weights (read-only)
+      - ${WEIGHTS_PATH}:/weights:ro
+      # Persistent mesh outputs
+      - spatial-memory-meshes:/tmp/spatial_memory/meshes
+      # Persistent logs
+      - spatial-memory-logs:/tmp/spatial_memory/logs
+    environment:
+      - WEIGHTS_DIR=/weights
+      - MESH_OUTPUT_DIR=/tmp/spatial_memory/meshes
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      # Service timeouts (seconds)
+      - SAM3_TIMEOUT=60
+      - SAM3D_TIMEOUT=300
+      - FOUNDATIONPOSE_TIMEOUT=120
+      # Logging
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  spatial-memory-meshes:
+    driver: local
+  spatial-memory-logs:
+    driver: local
+

@@ -94,13 +94,31 @@ Expected structure at `/weights`:
     └── *.yaml configs
 ```
 
-## Running with Docker
+## Quick Start (Production)
+
+```bash
+# 1. Build the production image (30-60 minutes)
+./scripts/build_docker.sh
+
+# 2. Set weights path
+export WEIGHTS_PATH=/path/to/perception_model_weights
+
+# 3. Start the service
+docker-compose -f docker-compose.production.yml up -d
+
+# 4. Test
+./scripts/test_deployment.sh
+```
+
+**For full production deployment guide, see [DEPLOYMENT.md](DEPLOYMENT.md)**
+
+## Running with Docker (Development)
 
 ```bash
 # Set path to your weights
 export WEIGHTS_PATH=/path/to/perception_model_weights
 
-# Build and run
+# Build and run (development mode with code mounting)
 docker-compose up --build
 
 # Or with docker directly

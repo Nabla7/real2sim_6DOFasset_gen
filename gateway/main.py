@@ -6,7 +6,10 @@ and orchestrates the SAM3 -> SAM3D -> FoundationPose pipeline.
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import uvicorn
@@ -17,11 +20,21 @@ from .config import GATEWAY_HOST, GATEWAY_PORT
 from .pipeline import get_pipeline
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 logger = logging.getLogger("spatial_memory.gateway")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    file_handler = RotatingFileHandler(
+        LOG_DIR / "gateway.log", maxBytes=10_000_000, backupCount=5
+    )
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
 
 
 # --- Pydantic Models ---

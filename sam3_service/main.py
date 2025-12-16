@@ -26,7 +26,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 # Configure logging
-LOG_DIR = Path("/tmp/spatial_memory/logs")
+LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 

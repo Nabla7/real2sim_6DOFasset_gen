@@ -121,12 +121,19 @@ def _ensure_model():
     for device in candidate_devices:
         logger.info(f"Loading SAM 3 Image Model on {device}...")
         try:
-            # Set environment for weights path
-            os.environ["SAM3_CHECKPOINT"] = SAM3_CHECKPOINT
-            os.environ["SAM3_CONFIG"] = SAM3_CONFIG
-
-            model = build_sam3_image_model()
-            model.to(device if device == "cpu" else "cuda")
+            # Verify checkpoint exists
+            if not os.path.exists(SAM3_CHECKPOINT):
+                raise FileNotFoundError(f"Checkpoint not found: {SAM3_CHECKPOINT}")
+            
+            logger.info(f"Loading from local checkpoint: {SAM3_CHECKPOINT}")
+            
+            # Build model with local checkpoint, disable HF download
+            model = build_sam3_image_model(
+                checkpoint_path=SAM3_CHECKPOINT,
+                load_from_HF=False,
+                device=device,
+                eval_mode=True,
+            )
             processor = Sam3Processor(model)
 
             _model = model

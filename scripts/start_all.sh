@@ -36,6 +36,7 @@ echo "Starting SAM3D..."
 conda run -n sam3d-objects --no-capture-output \
   env PYTHONPATH=/workspace/dimos_hosted_services:/workspace/third_party/sam-3d-objects \
       WEIGHTS_DIR=$WEIGHTS_DIR \
+      SAM3D_PATH=/workspace/third_party/sam-3d-objects \
       PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   python -m sam3d_service.main >> "$LOG_DIR/sam3d.log" 2>&1 &
 echo $! > "$LOG_DIR/sam3d.pid"

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from PIL import Image
@@ -79,8 +80,12 @@ def compute_pointmap_from_depth(depth: np.ndarray, K: np.ndarray) -> np.ndarray:
     # Create pixel coordinate grids
     u, v = np.meshgrid(np.arange(w), np.arange(h))
 
+    # Convert invalid depth values (0 or very small) to NaN
+    # RealSense and other depth sensors use 0 for invalid measurements
+    z = depth.copy()
+    z[z < 0.01] = np.nan  # Less than 1cm is likely invalid
+
     # Project to 3D
-    z = depth
     x = (u - cx) * z / fx
     y = (v - cy) * z / fy
 
@@ -107,13 +112,17 @@ class InferenceWorker(mp.Process):
         worker_logger = _configure_logging("sam3d_worker")
         worker_logger.info("Worker process started. Initializing SAM 3D pipeline...")
 
-        # Add SAM3D to path
-        sam3d_path = os.getenv("SAM3D_PATH", "/app/third_party/sam-3d-objects")
+        # Add SAM3D to path (following official demo.py pattern)
+        sam3d_path = os.getenv("SAM3D_PATH", "/workspace/third_party/sam-3d-objects")
+        notebook_path = os.path.join(sam3d_path, "notebook")
+        if os.path.exists(notebook_path) and notebook_path not in sys.path:
+            sys.path.insert(0, notebook_path)
         if os.path.exists(sam3d_path) and sam3d_path not in sys.path:
             sys.path.insert(0, sam3d_path)
 
         try:
-            from notebook.inference import Inference
+            # Import following official demo.py pattern: from inference import Inference
+            from inference import Inference
 
             self._inference = Inference(self.config_path, compile=False)
             worker_logger.info("SAM 3D pipeline initialized successfully in worker.")
@@ -139,7 +148,9 @@ class InferenceWorker(mp.Process):
                 # Call inference with optional pointmap for depth-based scaling
                 if pointmap is not None:
                     worker_logger.info(f"Using provided pointmap for scaling: {pointmap.shape}")
-                    output = self._inference(image_np, mask_np, seed=seed, pointmap=pointmap)
+                    # Convert numpy pointmap to torch tensor (expected by SAM3D pipeline)
+                    pointmap_tensor = torch.from_numpy(pointmap).float()
+                    output = self._inference(image_np, mask_np, seed=seed, pointmap=pointmap_tensor)
                 else:
                     worker_logger.info("No pointmap provided, using internal depth estimation")
                     output = self._inference(image_np, mask_np, seed=seed)

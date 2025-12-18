@@ -59,7 +59,7 @@ SAM3_CHECKPOINT = os.path.join(SAM3_WEIGHTS_PATH, "sam3.pt")
 SAM3_CONFIG = os.path.join(SAM3_WEIGHTS_PATH, "config.json")
 
 DEFAULT_CONFIDENCE = float(os.getenv("SAM3_DEFAULT_CONF", "0.30"))
-MAX_DETECTIONS = int(os.getenv("SAM3_MAX_DETECTIONS", "30"))
+MAX_DETECTIONS = int(os.getenv("SAM3_MAX_DETECTIONS", "3"))
 
 
 # --- Pydantic Models ---

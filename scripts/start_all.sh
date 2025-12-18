@@ -4,15 +4,18 @@ set -e
 
 export WEIGHTS_DIR=/workspace/weights
 LOG_DIR=/workspace/logs
+MESH_DIR=/workspace/spatial_memory/meshes
 
-# Create log directory and clear old logs
-mkdir -p "$LOG_DIR"
+# Create directories and clear old data
+mkdir -p "$LOG_DIR" "$MESH_DIR"
 rm -f "$LOG_DIR"/*.log "$LOG_DIR"/*.pid
+rm -rf "$MESH_DIR"/*
 
 cd /workspace/dimos_hosted_services
 
 echo "=== Starting Spatial Memory Services ==="
 echo "Logs will be written to: $LOG_DIR"
+echo "Meshes will be saved to: $MESH_DIR"
 echo ""
 
 # Gateway (port 8080)
@@ -20,6 +23,7 @@ echo "Starting Gateway..."
 conda run -n gateway --no-capture-output \
   env PYTHONPATH=/workspace/dimos_hosted_services \
       WEIGHTS_DIR=$WEIGHTS_DIR \
+      MESH_OUTPUT_DIR=$MESH_DIR \
   python -m gateway.main >> "$LOG_DIR/gateway.log" 2>&1 &
 echo $! > "$LOG_DIR/gateway.pid"
 
@@ -37,6 +41,7 @@ conda run -n sam3d-objects --no-capture-output \
   env PYTHONPATH=/workspace/dimos_hosted_services:/workspace/third_party/sam-3d-objects \
       WEIGHTS_DIR=$WEIGHTS_DIR \
       SAM3D_PATH=/workspace/third_party/sam-3d-objects \
+      MESH_OUTPUT_DIR=$MESH_DIR \
       PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   python -m sam3d_service.main >> "$LOG_DIR/sam3d.log" 2>&1 &
 echo $! > "$LOG_DIR/sam3d.pid"

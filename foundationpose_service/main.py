@@ -203,6 +203,18 @@ class FoundationPoseWorker(mp.Process):
             "last_pose": pose,
         }
 
+        # Generate debug visualization
+        self._save_debug_visualization(
+            object_id=object_id,
+            rgb=rgb,
+            depth=depth,
+            mask=mask,
+            mesh=mesh,
+            pose=pose,
+            K=K,
+            worker_logger=worker_logger,
+        )
+
         return {
             "object_id": object_id,
             "pose": {
@@ -290,6 +302,77 @@ class FoundationPoseWorker(mp.Process):
             y = (R[1, 2] + R[2, 1]) / s
             z = 0.25 * s
         return [float(x), float(y), float(z), float(w)]
+
+    def _save_debug_visualization(
+        self,
+        object_id: str,
+        rgb: np.ndarray,
+        depth: np.ndarray,
+        mask: np.ndarray,
+        mesh,
+        pose: np.ndarray,
+        K: np.ndarray,
+        worker_logger,
+    ) -> None:
+        """Generate and save a debug visualization composite image.
+
+        Creates a 4-panel composite: [Original RGB | Masked RGB | Depth colormap | Pose overlay]
+        Saves to /workspace/debug/{object_id}.png
+        """
+        try:
+            import Utils
+            import imageio
+
+            # Compute oriented bounding box for visualization
+            to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
+            bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
+            center_pose = pose @ np.linalg.inv(to_origin)
+
+            # Draw 3D bounding box and axes on the image
+            vis = Utils.draw_posed_3d_box(
+                K, img=rgb.copy(), ob_in_cam=center_pose, bbox=bbox
+            )
+            vis = Utils.draw_xyz_axis(
+                vis,
+                ob_in_cam=center_pose,
+                scale=0.1,
+                K=K,
+                thickness=3,
+                transparency=0,
+                is_input_rgb=False,
+            )
+
+            # Create masked RGB view
+            masked_rgb = rgb.copy()
+            masked_rgb[~mask] = 0
+
+            # Create depth colormap visualization
+            d_valid = depth[depth > 0]
+            if d_valid.size > 0:
+                d_min, d_max = d_valid.min(), d_valid.max()
+                depth_norm = (
+                    ((depth - d_min) / (d_max - d_min + 1e-6) * 255)
+                    .clip(0, 255)
+                    .astype(np.uint8)
+                )
+                depth_vis = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
+            else:
+                depth_vis = np.zeros_like(rgb)
+
+            # Create 4-panel composite: Original | Masked | Depth | Pose result
+            composite = np.hstack([rgb, masked_rgb, depth_vis, vis])
+
+            # Save to debug folder
+            debug_dir = Path("/workspace/debug")
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            vis_path = debug_dir / f"{object_id}.png"
+
+            # Convert BGR -> RGB for saving (imageio expects RGB)
+            imageio.imwrite(str(vis_path), composite[..., ::-1])
+            worker_logger.info(f"Saved debug visualization to {vis_path}")
+
+        except Exception as e:
+            worker_logger.warning(f"Debug visualization failed: {e}")
 
 
 # --- Global State ---

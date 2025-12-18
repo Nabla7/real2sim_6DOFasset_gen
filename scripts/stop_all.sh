@@ -49,6 +49,14 @@ for port in 8080 8091 8092 8093; do
   fi
 done
 
+# Kill orphaned worker processes from venvs (multiprocessing workers)
+echo ""
+echo "Killing orphaned worker processes..."
+pkill -9 -f "/venv/sam3d-objects" 2>/dev/null || true
+pkill -9 -f "/venv/foundationpose" 2>/dev/null || true
+pkill -9 -f "/venv/sam3" 2>/dev/null || true
+pkill -9 -f "/venv/gateway" 2>/dev/null || true
+
 echo ""
 echo "=== All services stopped ==="
 echo ""

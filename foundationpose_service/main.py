@@ -69,18 +69,18 @@ FP_SCORER_DIR = os.path.join(FP_WEIGHTS_PATH, "2024-01-11-20-02-45")
 class FoundationPoseWorker(mp.Process):
     """Worker process that loads FoundationPose and handles pose estimation."""
 
-    def __init__(self, task_queue, result_queue, refiner_dir, scorer_dir):
+    def __init__(self, task_queue, result_queue):
         super().__init__()
         self.task_queue = task_queue
         self.result_queue = result_queue
-        self.refiner_dir = refiner_dir
-        self.scorer_dir = scorer_dir
         self._estimator = None
+        self._scorer = None
+        self._refiner = None
         self._registered_objects = {}
 
     def run(self):
         worker_logger = _configure_logging("foundationpose_worker")
-        worker_logger.info("Worker started. Initializing FoundationPose...")
+        worker_logger.info("Worker started. Initializing FoundationPose predictors...")
 
         # Add FoundationPose to path
         fp_path = os.getenv("FOUNDATIONPOSE_PATH", "/app/third_party/FoundationPose")
@@ -89,16 +89,15 @@ class FoundationPoseWorker(mp.Process):
 
         try:
             import torch
-            from estimater import FoundationPose
+            from learning.training.predict_score import ScorePredictor
+            from learning.training.predict_pose_refine import PoseRefinePredictor
 
-            # Load models
-            self._estimator = FoundationPose(
-                model_pts=None,  # Will be set per-object
-                model_normals=None,
-                refiner_dir=self.refiner_dir,
-                scorer_dir=self.scorer_dir,
-            )
-            worker_logger.info("FoundationPose initialized successfully.")
+            # Initialize predictor models (FoundationPose will be created lazily with first mesh)
+            worker_logger.info("Loading ScorePredictor...")
+            self._scorer = ScorePredictor()
+            worker_logger.info("Loading PoseRefinePredictor...")
+            self._refiner = PoseRefinePredictor()
+            worker_logger.info("FoundationPose predictors loaded. Ready to accept requests.")
 
         except Exception as e:
             worker_logger.error(f"Failed to initialize FoundationPose: {e}")
@@ -136,6 +135,7 @@ class FoundationPoseWorker(mp.Process):
     def _handle_register(self, task: Dict, worker_logger) -> Dict:
         """Handle object registration with initial pose estimation."""
         import torch
+        from estimater import FoundationPose
 
         object_id = task["object_id"]
         mesh_path = task["mesh_path"]
@@ -159,8 +159,18 @@ class FoundationPoseWorker(mp.Process):
         pts = mesh.vertices.astype(np.float32)
         normals = mesh.vertex_normals.astype(np.float32)
 
-        # Set mesh for estimator
-        self._estimator.reset_object(pts, normals)
+        # Create or update FoundationPose estimator with mesh
+        if self._estimator is None:
+            worker_logger.info("Creating FoundationPose estimator with first mesh...")
+            self._estimator = FoundationPose(
+                model_pts=pts,
+                model_normals=normals,
+                mesh=mesh,
+                scorer=self._scorer,
+                refiner=self._refiner,
+            )
+        else:
+            self._estimator.reset_object(pts, normals, mesh=mesh)
 
         # Run pose estimation
         with torch.no_grad():
@@ -220,7 +230,7 @@ class FoundationPoseWorker(mp.Process):
         worker_logger.info(f"Tracking object {object_id}")
 
         # Set mesh points for estimator
-        self._estimator.reset_object(obj_data["pts"], obj_data["normals"])
+        self._estimator.reset_object(obj_data["pts"], obj_data["normals"], mesh=obj_data["mesh"])
 
         # Run tracking
         with torch.no_grad():
@@ -304,8 +314,6 @@ class ServiceState:
         self.worker = FoundationPoseWorker(
             self.task_queue,
             self.result_queue,
-            FP_REFINER_DIR,
-            FP_SCORER_DIR,
         )
         self.worker.start()
 

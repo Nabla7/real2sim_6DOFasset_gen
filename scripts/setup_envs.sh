@@ -45,6 +45,11 @@ if [ ! -d "$THIRD_PARTY_DIR/FoundationPose" ]; then
     git clone https://github.com/NVlabs/FoundationPose.git "$THIRD_PARTY_DIR/FoundationPose"
 fi
 
+if [ ! -d "$THIRD_PARTY_DIR/GraspGen" ]; then
+    echo "Cloning GraspGen..."
+    git clone https://github.com/NVlabs/GraspGen.git "$THIRD_PARTY_DIR/GraspGen"
+fi
+
 # ============================================
 # Gateway environment
 # ============================================
@@ -158,6 +163,52 @@ else
 fi
 
 # ============================================
+# GraspGen environment
+# ============================================
+echo ""
+echo "=== Creating GraspGen environment ==="
+if conda env list | grep -q "^GraspGen "; then
+    echo "Environment 'GraspGen' already exists. Skipping."
+else
+    echo "This will take 5-10 minutes due to C++ compilation..."
+    
+    conda create -n GraspGen python=3.10 -y
+    conda activate GraspGen
+    
+    # Set CUDA paths for compilation
+    export CUDA_HOME=/usr/local/cuda-12.1
+    export PATH=/usr/local/cuda-12.1/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH
+    
+    # Install PyTorch with CUDA 12.1
+    pip install torch==2.1.0 torchvision==0.16.0 torch-cluster \
+        -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+    
+    # Install GraspGen
+    cd "$THIRD_PARTY_DIR/GraspGen"
+    pip install -e .
+    
+    # Build PointNet++ extensions
+    echo "Building PointNet++ C++ extensions..."
+    cd pointnet2_ops
+    pip install --no-build-isolation .
+    
+    # Install torch-scatter
+    pip install torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+    
+    # Install remaining dependencies
+    pip install pyrender PyOpenGL==3.1.5 transformers tensordict \
+        diffusers==0.11.1 timm huggingface-hub==0.25.2 scene-synthesizer[recommend] \
+        meshcat fastapi uvicorn pydantic
+    
+    # Set environment variable for offscreen rendering
+    echo "export PYOPENGL_PLATFORM=egl" >> ~/.bashrc
+    
+    conda deactivate
+    echo "✅ Created GraspGen environment"
+fi
+
+# ============================================
 # Copy weights for FoundationPose
 # ============================================
 echo ""
@@ -180,6 +231,7 @@ echo "  • gateway"
 echo "  • sam3"
 echo "  • sam3d-objects"
 echo "  • foundationpose"
+echo "  • GraspGen"
 echo ""
 echo "To run services locally, use scripts/start_all.sh"
 echo "Or manually:"
@@ -187,8 +239,10 @@ echo "  Gateway:        conda activate gateway && python -m gateway.main"
 echo "  SAM3:           conda activate sam3 && python -m sam3_service.main"
 echo "  SAM3D:          conda activate sam3d-objects && python -m sam3d_service.main"
 echo "  FoundationPose: conda activate foundationpose && python -m foundationpose_service.main"
+echo "  GraspGen:       conda activate GraspGen && cd $THIRD_PARTY_DIR/GraspGen && python scripts/demo_object_mesh.py --help"
 echo ""
 echo "Make sure to set environment variables:"
 echo "  export WEIGHTS_DIR=$WORKSPACE_DIR/weights"
 echo "  export SAM3D_PATH=$THIRD_PARTY_DIR/sam-3d-objects"
 echo "  export FOUNDATIONPOSE_PATH=$THIRD_PARTY_DIR/FoundationPose"
+echo "  export PYOPENGL_PLATFORM=egl  # For GraspGen offscreen rendering"

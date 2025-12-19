@@ -90,9 +90,10 @@ See `scripts/start_all.sh` for setting up conda environments locally.
 
 **Important:** Local development requires:
 - Conda/Mamba installed
-- CUDA 12.1+ toolkit
+- CUDA 12.1+ toolkit (and CUDA 11.8 for FoundationPose)
 - Third-party repos cloned to `/workspace/third_party/`
 - Weights in `/workspace/weights/`
+- System packages: `libglu1-mesa-dev`, `libegl1-mesa-dev` (for GraspGen)
 
 ---
 
@@ -383,43 +384,6 @@ deploy:
 
 ---
 
-## Recent Fixes & Changes
-
-### Version 2024-12-18
-
-**Critical Fixes:**
-1. **SAM3D Import Error Fixed**
-   - Issue: `No module named 'notebook.inference'`
-   - Fix: Changed import pattern to match official SAM3D demo
-   - Added proper path handling for spawned worker processes
-
-2. **SAM3D Pointmap Type Error Fixed**
-   - Issue: `'numpy.ndarray' object has no attribute 'to'`
-   - Fix: Convert numpy arrays to PyTorch tensors before passing to inference
-   - Added handling for invalid depth values (< 0.01m → NaN)
-
-3. **FoundationPose Initialization Fixed**
-   - Issue: `'NoneType' object has no attribute 'vertices'`
-   - Fix: Lazy initialization pattern - load predictors at startup, create estimator on first request
-   - Added automatic weights copying via docker-entrypoint.sh
-
-4. **GPU Memory Leak Fixed**
-   - Issue: Orphaned worker processes not killed on restart
-   - Fix: Updated stop script to kill multiprocessing workers
-   - Prevents 76GB+ GPU memory accumulation
-
-5. **Detection Limit Reduced**
-   - Changed from 30 to 3 detections per keyword
-   - Prevents overwhelming results for common objects
-
-**Docker Build Improvements:**
-- Third-party repositories now cloned during build
-- SAM3D environment uses proper conda environment file
-- FoundationPose C++ extensions compiled automatically
-- All environment variables properly set in supervisord
-
----
-
 ## Support
 
 For issues or questions:
@@ -452,11 +416,13 @@ For issues or questions:
 │  • sam3 (Python 3.11, CUDA 12.1)                        │
 │  • sam3d-objects (Python 3.11, CUDA 12.1 + Kaolin)     │
 │  • foundationpose (Python 3.9, CUDA 11.8)               │
+│  • GraspGen (Python 3.10, CUDA 12.1)                    │
 │                                                          │
 │  Third-party repos:                                      │
 │  • /app/third_party/sam3                                │
 │  • /app/third_party/sam-3d-objects                      │
 │  • /app/third_party/FoundationPose                      │
+│  • /app/third_party/GraspGen                            │
 │                                                          │
 │  Volumes:                                                │
 │  • /weights (read-only mount) → Model weights           │
@@ -466,12 +432,4 @@ For issues or questions:
 ```
 
 **Pipeline Parallelism:** Each stage processes different requests concurrently (assembly-line style).
-
-**Key Fixes Applied:**
-- ✅ Third-party repos cloned during build
-- ✅ SAM3D uses proper conda environment with all dependencies
-- ✅ FoundationPose C++ extensions compiled during build
-- ✅ Weights automatically copied to correct locations on startup
-- ✅ Worker processes properly cleaned up (no GPU memory leaks)
-- ✅ Detection limit reduced to 3 per keyword (was 30)
 

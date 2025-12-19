@@ -55,6 +55,10 @@ RUN git clone https://github.com/NVlabs/FoundationPose.git && \
     cd FoundationPose && \
     git checkout main
 
+RUN git clone https://github.com/NVlabs/GraspGen.git && \
+    cd GraspGen && \
+    git checkout main
+
 # ============================================
 # Copy application code and requirements
 # ============================================
@@ -117,6 +121,38 @@ RUN conda run -n foundationpose pip install --no-cache-dir -r requirements.txt &
 # Build C++ extensions
 RUN conda run -n foundationpose bash -c "cd mycpp && mkdir -p build && cd build && cmake .. && make"
 RUN conda run -n foundationpose bash -c "cd bundlesdf/mycuda && python setup.py install"
+
+# ============================================
+# Environment 5: GraspGen (Python 3.10, CUDA 12.1)
+# ============================================
+RUN conda create -n GraspGen python=3.10 -y && \
+    conda clean -afy
+
+WORKDIR /app/third_party/GraspGen
+
+# Install PyTorch with CUDA 12.1
+RUN conda run -n GraspGen pip install --no-cache-dir \
+    torch==2.1.0 torchvision==0.16.0 torch-cluster \
+    -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+
+# Install GraspGen package
+RUN conda run -n GraspGen pip install --no-cache-dir -e .
+
+# Build PointNet++ C++ extensions
+RUN conda run -n GraspGen bash -c "cd pointnet2_ops && pip install --no-build-isolation ."
+
+# Install additional dependencies
+RUN conda run -n GraspGen pip install --no-cache-dir \
+    torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cu121.html && \
+    conda run -n GraspGen pip install --no-cache-dir \
+    pyrender PyOpenGL==3.1.5 transformers tensordict \
+    diffusers==0.11.1 timm huggingface-hub==0.25.2 scene-synthesizer[recommend] \
+    meshcat fastapi uvicorn pydantic
+
+# Install system dependencies for offscreen rendering
+RUN apt-get update && apt-get install -y \
+    libglu1-mesa libglu1-mesa-dev libegl1-mesa-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # ============================================
 # Final Setup

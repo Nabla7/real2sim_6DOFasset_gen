@@ -119,11 +119,12 @@ curl http://localhost:8080/health
 ### What Happens During Build
 
 The Docker build process:
-1. ✅ Clones third-party repos (SAM3, SAM3D, FoundationPose)
-2. ✅ Creates 4 conda environments with proper dependencies
+1. ✅ Clones third-party repos (SAM3, SAM3D, FoundationPose, GraspGen)
+2. ✅ Creates 5 conda environments with proper dependencies
 3. ✅ Installs SAM3D with complex NVIDIA dependencies (Kaolin, etc.)
 4. ✅ Compiles FoundationPose C++ extensions
-5. ✅ Sets up all environment variables and paths
+5. ✅ Compiles GraspGen PointNet++ C++ extensions
+6. ✅ Sets up all environment variables and paths
 
 **Note:** This is a one-time build. Subsequent starts are instant.
 
@@ -209,6 +210,18 @@ if response.success:
 | `FOUNDATIONPOSE_TIMEOUT` | `120` | FoundationPose request timeout |
 | `SAM3_MAX_DETECTIONS` | `3` | Max detections per keyword |
 | `SAM3_DEFAULT_CONF` | `0.30` | Default confidence threshold |
+| `PYOPENGL_PLATFORM` | `egl` | OpenGL platform for offscreen rendering |
+
+## Third-Party Components
+
+The service integrates the following research models:
+
+- **SAM3** - Text-prompted segmentation (Meta)
+- **SAM3D** - 3D mesh reconstruction from 2D masks (Meta)
+- **FoundationPose** - 6D pose estimation (NVIDIA)
+- **GraspGen** - 6-DOF grasp generation (NVIDIA)
+
+All repositories are automatically cloned and configured during Docker build or via `setup_envs.sh`.
 
 ## Known Issues & Fixes
 
@@ -219,7 +232,8 @@ All critical issues have been resolved in the current version:
 ✅ **GPU memory leaks** - Fixed via proper worker cleanup  
 ✅ **Too many detections** - Reduced from 30 to 3 per keyword  
 ✅ **Missing dependencies** - All third-party repos cloned during build  
-✅ **C++ compilation** - FoundationPose extensions built automatically
+✅ **C++ compilation** - FoundationPose & GraspGen extensions built automatically  
+✅ **GraspGen OpenGL issues** - Configured for EGL offscreen rendering
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed troubleshooting.
 

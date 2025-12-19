@@ -16,8 +16,15 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .config import GATEWAY_HOST, GATEWAY_PORT
-from .pipeline import get_pipeline
+from .config import (
+    GATEWAY_HOST,
+    GATEWAY_PORT,
+    SAM3_URL,
+    SAM3_TIMEOUT,
+    GRASPGEN_URL,
+    GRASPGEN_TIMEOUT,
+)
+from .pipeline import get_pipeline, compute_iou
 
 # Configure logging
 LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
@@ -52,6 +59,10 @@ class ProcessRequest(BaseModel):
     bbox: List[float] = Field(
         ..., description="2D bounding box [x1, y1, x2, y2] from YOLO-E"
     )
+    # Optional grasp generation
+    include_grasps: bool = Field(False, description="Include grasp pose generation")
+    filter_collisions: bool = Field(True, description="Filter collision grasps (if include_grasps=True)")
+    gripper_type: str = Field("robotiq_2f_140", description="Gripper type for grasping")
 
 
 class Position(BaseModel):
@@ -78,6 +89,12 @@ class BBox3D(BaseModel):
     sz: float
 
 
+class GraspPose(BaseModel):
+    transform: List[float] = Field(..., description="4x4 transform matrix (16 floats)")
+    score: float = Field(..., description="Grasp quality score")
+    collision_free: Optional[bool] = Field(None, description="Collision-free status")
+
+
 class ProcessResponse(BaseModel):
     """Response from the spatial memory pipeline."""
 
@@ -86,6 +103,32 @@ class ProcessResponse(BaseModel):
     pose: Optional[Pose] = Field(None, description="6D pose in camera frame")
     bbox_3d: Optional[BBox3D] = Field(None, description="3D bounding box dimensions")
     confidence: float = Field(1.0, description="Detection confidence")
+    grasps: Optional[List[GraspPose]] = Field(None, description="Grasp poses (if requested)")
+
+
+class GraspRequest(BaseModel):
+    """Request for grasp-only generation (faster, no mesh/pose)."""
+
+    image_rgb_b64: str = Field(..., description="Base64-encoded RGB image")
+    depth_b64: str = Field(..., description="Base64-encoded depth image (meters, float32)")
+    K: List[List[float]] = Field(
+        ..., description="Camera intrinsics matrix 3x3"
+    )
+    label: str = Field(..., description="Object label")
+    bbox: List[float] = Field(..., description="2D bounding box [x1, y1, x2, y2]")
+    filter_collisions: bool = Field(True, description="Filter colliding grasps")
+    gripper_type: str = Field("robotiq_2f_140", description="Gripper type")
+    num_grasps: int = Field(400, description="Number of grasps to generate")
+    topk_num_grasps: int = Field(100, description="Return top K grasps")
+
+
+class GraspResponse(BaseModel):
+    """Response from grasp-only pipeline."""
+
+    label: str
+    grasps: List[GraspPose]
+    gripper_type: str
+    inference_time_ms: float
 
 
 # --- FastAPI App ---
@@ -148,16 +191,117 @@ async def process(request: ProcessRequest) -> ProcessResponse:
         if result.get("bbox_3d"):
             bbox_3d = BBox3D(**result["bbox_3d"])
 
+        grasps = None
+        if result.get("grasps"):
+            grasps = [GraspPose(**g) for g in result["grasps"]]
+
         return ProcessResponse(
             label=result.get("label", request.label),
             mesh_b64=result.get("mesh_b64"),
             pose=pose,
             bbox_3d=bbox_3d,
             confidence=result.get("confidence", 1.0),
+            grasps=grasps,
         )
 
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/grasp", response_model=GraspResponse)
+async def grasp(request: GraspRequest) -> GraspResponse:
+    """
+    Direct grasp generation without mesh/pose estimation (faster path).
+    
+    Flow: SAM3 segmentation -> GraspGen
+    Skips mesh reconstruction and pose estimation for speed.
+    """
+    pipeline = await get_pipeline()
+    
+    try:
+        # Call SAM3 first to get segmentation mask
+        sam3_payload = {
+            "image_b64": request.image_rgb_b64,
+            "text_prompts": [request.label],
+        }
+        
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{SAM3_URL}/segment",
+                json=sam3_payload,
+                timeout=aiohttp.ClientTimeout(total=SAM3_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    raise RuntimeError(f"SAM3 error: {error}")
+                sam3_result = await resp.json()
+
+            detections = sam3_result.get("detections", [])
+            if not detections:
+                raise RuntimeError(f"SAM3 found no objects for label '{request.label}'")
+
+            # Match detection to input bbox
+            best_idx = 0
+            best_iou = 0.0
+            for i, det in enumerate(detections):
+                iou = compute_iou(request.bbox, det["bbox"])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_idx = i
+            matched_det = detections[best_idx]
+            mask_b64 = matched_det["mask"]
+
+            logger.info(f"SAM3 completed for grasp request, IoU={best_iou:.3f}")
+
+            # Call GraspGen with depth + mask
+            # First decode depth to get shape
+            depth_bytes = base64.b64decode(request.depth_b64)
+            num_pixels = len(depth_bytes) // 4
+            if num_pixels == 480 * 640:
+                depth_shape = [480, 640]
+            elif num_pixels == 720 * 1280:
+                depth_shape = [720, 1280]
+            else:
+                depth_shape = [480, 640]  # fallback
+
+            graspgen_payload = {
+                "depth_b64": request.depth_b64,
+                "depth_shape": depth_shape,
+                "mask_b64": mask_b64,
+                "rgb_b64": request.image_rgb_b64,
+                "K": request.K,
+                "filter_collisions": request.filter_collisions,
+                "gripper_type": request.gripper_type,
+                "num_grasps": request.num_grasps,
+                "topk_num_grasps": request.topk_num_grasps,
+            }
+
+            async with session.post(
+                f"{GRASPGEN_URL}/generate",
+                json=graspgen_payload,
+                timeout=aiohttp.ClientTimeout(total=GRASPGEN_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    raise RuntimeError(f"GraspGen error: {error}")
+                graspgen_result = await resp.json()
+
+            logger.info(f"GraspGen completed, {len(graspgen_result.get('grasps', []))} grasps generated")
+
+            # Convert grasps format
+            grasps = [GraspPose(**g) for g in graspgen_result.get("grasps", [])]
+
+            return GraspResponse(
+                label=request.label,
+                grasps=grasps,
+                gripper_type=request.gripper_type,
+                inference_time_ms=graspgen_result.get("inference_time_ms", 0),
+            )
+
+    except Exception as e:
+        logger.error(f"Grasp pipeline failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

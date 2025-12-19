@@ -13,6 +13,14 @@ else
     echo "WARNING: /weights/foundationpose not found - FoundationPose may fail to initialize"
 fi
 
+# Check for GraspGen models
+if [ ! -d "/app/third_party/GraspGen/GraspGenModels" ]; then
+    echo "WARNING: GraspGenModels not found - GraspGen service may fail to initialize"
+    echo "Please ensure GraspGenModels is cloned from https://huggingface.co/adithyamurali/GraspGenModels"
+else
+    echo "GraspGenModels found"
+fi
+
 # Clean mesh directory
 echo "Cleaning mesh output directory..."
 rm -rf /tmp/spatial_memory/meshes/*

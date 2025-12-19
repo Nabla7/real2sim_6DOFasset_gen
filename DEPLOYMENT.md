@@ -62,6 +62,22 @@ perception_model_weights/
     └── ... (other checkpoints)
 ```
 
+### GraspGen Models
+
+GraspGen models must be cloned separately to `third_party/GraspGen/`:
+
+```bash
+cd /workspace/third_party/GraspGen
+git clone https://huggingface.co/adithyamurali/GraspGenModels
+
+# This contains:
+# - checkpoints/*.yml (gripper configurations)
+# - checkpoints/*_gen.pth (generator models)
+# - checkpoints/*_dis.pth (discriminator models)
+```
+
+**Note:** In Docker, this is handled automatically during entrypoint.
+
 ---
 
 ## Building from Source
@@ -219,14 +235,17 @@ Health check endpoints:
 - SAM3: `http://localhost:8091/health`
 - SAM3D: `http://localhost:8092/health`
 - FoundationPose: `http://localhost:8093/health`
+- GraspGen: `http://localhost:8094/health`
 
 ### Performance
 
 Expected processing times (A100-80GB):
 - **SAM3**: ~1-2 seconds
 - **SAM3D**: ~10-30 seconds (depends on mesh complexity)
-- **FoundationPose**: ~5-10 seconds
-- **Total**: ~20-45 seconds per object
+- **FoundationPose**: ~5-10 seconds (parallel with GraspGen)
+- **GraspGen**: ~1-5 seconds (collision filtering adds ~1-2s)
+- **Total (full pipeline)**: ~20-45 seconds per object
+- **Total (grasp-only)**: ~5-10 seconds per object
 
 ---
 
@@ -316,6 +335,20 @@ curl -X POST http://localhost:8092/reconstruct \
 curl -X POST http://localhost:8093/register \
   -H "Content-Type: application/json" \
   -d '{"object_id": "test", "mesh_path": "/tmp/test.obj", ...}'
+```
+
+**Test GraspGen:**
+```bash
+curl -X POST http://localhost:8094/generate \
+  -H "Content-Type: application/json" \
+  -d '{"depth_b64": "...", "mask_b64": "...", "K": [[...]], ...}'
+```
+
+**Test Grasp-Only Pipeline:**
+```bash
+curl -X POST http://localhost:8080/grasp \
+  -H "Content-Type: application/json" \
+  -d '{"image_rgb_b64": "...", "depth_b64": "...", "K": [[...]], "label": "bottle", "bbox": [...]}'
 ```
 
 ---

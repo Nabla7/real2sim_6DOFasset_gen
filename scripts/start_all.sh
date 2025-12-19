@@ -54,9 +54,18 @@ conda run -n foundationpose --no-capture-output \
   python -m foundationpose_service.main >> "$LOG_DIR/foundationpose.log" 2>&1 &
 echo $! > "$LOG_DIR/foundationpose.pid"
 
+# GraspGen (port 8094)
+echo "Starting GraspGen..."
+conda run -n GraspGen --no-capture-output \
+  env PYTHONPATH=/workspace/dimos_hosted_services:/workspace/third_party/GraspGen \
+      GRASPGEN_PATH=/workspace/third_party/GraspGen \
+      PYOPENGL_PLATFORM=egl \
+  python -m graspgen_service.main >> "$LOG_DIR/graspgen.log" 2>&1 &
+echo $! > "$LOG_DIR/graspgen.pid"
+
 echo ""
 echo "All services started. Waiting for initialization..."
-sleep 15
+sleep 20
 
 # Health check
 echo ""

@@ -82,11 +82,13 @@ RUN conda create -n gateway python=3.11 -y && \
 # Environment 2: SAM3 (Python 3.11, CUDA)
 # ============================================
 RUN conda create -n sam3 python=3.11 -y && \
-    conda run -n sam3 pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
-    conda run -n sam3 pip install --no-cache-dir -r /app/requirements/sam3.txt
+    conda run -n sam3 pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 WORKDIR /app/third_party/sam3
 RUN conda run -n sam3 pip install --no-cache-dir -e .
+
+# Add server wrapper dependencies
+RUN conda run -n sam3 pip install --no-cache-dir -r /app/requirements/sam3.txt
 
 # ============================================
 # Environment 3: SAM3D (Python 3.11, Complex)
@@ -135,19 +137,18 @@ RUN conda run -n GraspGen pip install --no-cache-dir \
     torch==2.1.0 torchvision==0.16.0 torch-cluster \
     -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
 
-# Install GraspGen package
+# Install GraspGen package (includes all ML dependencies from requirements.txt)
 RUN conda run -n GraspGen pip install --no-cache-dir -e .
 
 # Build PointNet++ C++ extensions
 RUN conda run -n GraspGen bash -c "cd pointnet2_ops && pip install --no-build-isolation ."
 
-# Install additional dependencies
+# Install torch-scatter (not in GraspGen requirements.txt)
 RUN conda run -n GraspGen pip install --no-cache-dir \
-    torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cu121.html && \
-    conda run -n GraspGen pip install --no-cache-dir \
-    pyrender PyOpenGL==3.1.5 transformers tensordict \
-    diffusers==0.11.1 timm huggingface-hub==0.25.2 scene-synthesizer[recommend] \
-    meshcat fastapi uvicorn pydantic
+    torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+
+# Add server wrapper dependencies
+RUN conda run -n GraspGen pip install --no-cache-dir -r /app/requirements/graspgen.txt
 
 # Install system dependencies for offscreen rendering
 RUN apt-get update && apt-get install -y \
@@ -171,7 +172,7 @@ ENV PYTHONPATH=/app:/app/third_party
 COPY scripts/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Expose ports
-EXPOSE 8080 8091 8092 8093
+EXPOSE 8080 8091 8092 8093 8094
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

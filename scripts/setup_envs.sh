@@ -76,11 +76,13 @@ else
     conda create -n sam3 python=3.11 -y
     conda activate sam3
     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-    pip install -r "$SERVICE_DIR/requirements/sam3.txt"
     
-    # Install SAM3 package
+    # Install SAM3 package (brings all ML dependencies)
     cd "$THIRD_PARTY_DIR/sam3"
     pip install -e .
+    
+    # Add server wrapper dependencies
+    pip install -r "$SERVICE_DIR/requirements/sam3.txt"
     
     conda deactivate
     echo "✅ Created sam3 environment"
@@ -142,10 +144,12 @@ else
     # Install PyTorch (CUDA 11.8 for FoundationPose)
     pip install torch==2.0.0+cu118 torchvision==0.15.1+cu118 --index-url https://download.pytorch.org/whl/cu118
     
-    # Install FoundationPose requirements
+    # Install FoundationPose requirements (all ML dependencies)
     cd "$THIRD_PARTY_DIR/FoundationPose"
     pip install -r requirements.txt
-    pip install fastapi uvicorn pydantic
+    
+    # Add server wrapper dependencies
+    pip install -r "$SERVICE_DIR/requirements/foundationpose.txt"
     
     # Build C++ extensions
     echo "Building C++ extensions..."
@@ -184,22 +188,20 @@ else
     pip install torch==2.1.0 torchvision==0.16.0 torch-cluster \
         -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
     
-    # Install GraspGen
+    # Install GraspGen package (brings all ML dependencies from requirements.txt)
     cd "$THIRD_PARTY_DIR/GraspGen"
     pip install -e .
     
-    # Build PointNet++ extensions
+    # Build PointNet++ C++ extensions
     echo "Building PointNet++ C++ extensions..."
     cd pointnet2_ops
     pip install --no-build-isolation .
     
-    # Install torch-scatter
+    # Install torch-scatter (not in GraspGen requirements.txt)
     pip install torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
     
-    # Install remaining dependencies
-    pip install pyrender PyOpenGL==3.1.5 transformers tensordict \
-        diffusers==0.11.1 timm huggingface-hub==0.25.2 scene-synthesizer[recommend] \
-        meshcat fastapi uvicorn pydantic
+    # Add server wrapper dependencies
+    pip install -r "$SERVICE_DIR/requirements/graspgen.txt"
     
     # Set environment variable for offscreen rendering
     echo "export PYOPENGL_PLATFORM=egl" >> ~/.bashrc

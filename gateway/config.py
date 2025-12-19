@@ -8,6 +8,7 @@ import os
 SAM3_URL = os.getenv("SAM3_URL", "http://localhost:8091")
 SAM3D_URL = os.getenv("SAM3D_URL", "http://localhost:8092")
 FOUNDATIONPOSE_URL = os.getenv("FOUNDATIONPOSE_URL", "http://localhost:8093")
+GRASPGEN_URL = os.getenv("GRASPGEN_URL", "http://localhost:8094")
 
 # Gateway settings
 GATEWAY_HOST = os.getenv("GATEWAY_HOST", "0.0.0.0")
@@ -17,6 +18,7 @@ GATEWAY_PORT = int(os.getenv("GATEWAY_PORT", "8080"))
 SAM3_TIMEOUT = int(os.getenv("SAM3_TIMEOUT", "60"))
 SAM3D_TIMEOUT = int(os.getenv("SAM3D_TIMEOUT", "300"))  # Mesh reconstruction is slow
 FOUNDATIONPOSE_TIMEOUT = int(os.getenv("FOUNDATIONPOSE_TIMEOUT", "120"))
+GRASPGEN_TIMEOUT = int(os.getenv("GRASPGEN_TIMEOUT", "60"))
 
 # Weights paths (mounted volume)
 WEIGHTS_DIR = os.getenv("WEIGHTS_DIR", "/weights")

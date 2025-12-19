@@ -39,7 +39,7 @@ Each stage processes different requests concurrently (assembly-line style):
 
 ### POST /process
 
-Process an object through the full pipeline.
+Process an object through the full pipeline (segmentation + mesh + pose).
 
 **Request:**
 ```json
@@ -48,7 +48,68 @@ Process an object through the full pipeline.
   "depth_b64": "base64...",
   "K": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
   "label": "bottle",
-  "bbox": [x1, y1, x2, y2]
+  "bbox": [x1, y1, x2, y2],
+  "include_grasps": false,
+  "filter_collisions": true,
+  "gripper_type": "robotiq_2f_140"
+}
+```
+
+**Optional Parameters:**
+- `include_grasps` (bool): Include grasp pose generation (default: false)
+- `filter_collisions` (bool): Filter colliding grasps (default: true)
+- `gripper_type` (str): "robotiq_2f_140" | "franka_panda" | "single_suction_cup_30mm"
+
+**Response (with grasps):**
+```json
+{
+  "label": "bottle",
+  "mesh_b64": "base64...",
+  "pose": {"position": {...}, "orientation": {...}},
+  "bbox_3d": {"sx": 0.08, "sy": 0.25, "sz": 0.08},
+  "confidence": 0.95,
+  "grasps": [
+    {
+      "transform": [1.0, 0, 0, 0, ...],
+      "score": 0.92,
+      "collision_free": true
+    }
+  ]
+}
+```
+
+### POST /grasp
+
+Direct grasp generation without mesh/pose estimation (faster, ~5-10 seconds).
+
+**Request:**
+```json
+{
+  "image_rgb_b64": "base64...",
+  "depth_b64": "base64...",
+  "K": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+  "label": "bottle",
+  "bbox": [x1, y1, x2, y2],
+  "filter_collisions": true,
+  "gripper_type": "robotiq_2f_140",
+  "num_grasps": 400,
+  "topk_num_grasps": 100
+}
+```
+
+**Response:**
+```json
+{
+  "label": "bottle",
+  "grasps": [
+    {
+      "transform": [1.0, 0, 0, 0, ...],
+      "score": 0.92,
+      "collision_free": true
+    }
+  ],
+  "gripper_type": "robotiq_2f_140",
+  "inference_time_ms": 850
 }
 ```
 

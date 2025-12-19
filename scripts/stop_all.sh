@@ -32,7 +32,8 @@ stop_service() {
   fi
 }
 
-# Stop services in reverse order (FoundationPose first, Gateway last)
+# Stop services in reverse order (GraspGen first, Gateway last)
+stop_service "graspgen" 8094
 stop_service "foundationpose" 8093
 stop_service "sam3d" 8092
 stop_service "sam3" 8091
@@ -41,7 +42,7 @@ stop_service "gateway" 8080
 # Also kill any remaining python processes on these ports
 echo ""
 echo "Checking for remaining processes on service ports..."
-for port in 8080 8091 8092 8093; do
+for port in 8080 8091 8092 8093 8094; do
   pid=$(lsof -ti :$port 2>/dev/null)
   if [ -n "$pid" ]; then
     echo "  Killing process on port $port (PID: $pid)"
@@ -55,6 +56,7 @@ echo "Killing orphaned worker processes..."
 pkill -9 -f "/venv/sam3d-objects" 2>/dev/null || true
 pkill -9 -f "/venv/foundationpose" 2>/dev/null || true
 pkill -9 -f "/venv/sam3" 2>/dev/null || true
+pkill -9 -f "/venv/GraspGen" 2>/dev/null || true
 pkill -9 -f "/venv/gateway" 2>/dev/null || true
 
 echo ""

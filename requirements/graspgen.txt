@@ -1,0 +1,5 @@
+# GraspGen service wrapper dependencies
+# Note: All ML dependencies come from GraspGen's requirements.txt and pip install -e .
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0

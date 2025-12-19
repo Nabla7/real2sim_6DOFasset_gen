@@ -38,11 +38,35 @@ ENV PATH=$CONDA_DIR/bin:$PATH
 # Initialize conda for shell
 RUN conda init bash
 
-# Create app directory
-WORKDIR /app
+# ============================================
+# Clone Third-Party Repositories
+# ============================================
+WORKDIR /app/third_party
 
-# Copy requirements
+RUN git clone https://github.com/facebookresearch/sam3.git && \
+    cd sam3 && \
+    git checkout main
+
+RUN git clone https://github.com/facebookresearch/sam-3d-objects.git && \
+    cd sam-3d-objects && \
+    git checkout main
+
+RUN git clone https://github.com/NVlabs/FoundationPose.git && \
+    cd FoundationPose && \
+    git checkout main
+
+# ============================================
+# Copy application code and requirements
+# ============================================
+WORKDIR /app
 COPY requirements/ /app/requirements/
+COPY gateway/ /app/gateway/
+COPY sam3_service/ /app/sam3_service/
+COPY sam3d_service/ /app/sam3d_service/
+COPY foundationpose_service/ /app/foundationpose_service/
+COPY scripts/ /app/scripts/
+
+RUN chmod +x /app/scripts/*.sh
 
 # ============================================
 # Environment 1: Gateway (Python 3.11, CPU)
@@ -57,33 +81,47 @@ RUN conda create -n sam3 python=3.11 -y && \
     conda run -n sam3 pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
     conda run -n sam3 pip install --no-cache-dir -r /app/requirements/sam3.txt
 
-# ============================================
-# Environment 3: SAM3D (Python 3.11, CUDA)
-# ============================================
-RUN conda create -n sam3d python=3.11 -y && \
-    conda run -n sam3d pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
-    conda run -n sam3d pip install --no-cache-dir -r /app/requirements/sam3d.txt
+WORKDIR /app/third_party/sam3
+RUN conda run -n sam3 pip install --no-cache-dir -e .
 
 # ============================================
-# Environment 4: FoundationPose (Python 3.9, CUDA)
+# Environment 3: SAM3D (Python 3.11, Complex)
+# ============================================
+WORKDIR /app/third_party/sam-3d-objects
+RUN conda env create -f environments/default.yml && \
+    conda clean -afy
+
+RUN conda run -n sam3d-objects bash -c "\
+    export PIP_EXTRA_INDEX_URL='https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121' && \
+    pip install --no-cache-dir -e '.[dev]' && \
+    pip install --no-cache-dir -e '.[p3d]' && \
+    export PIP_FIND_LINKS='https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html' && \
+    pip install --no-cache-dir -e '.[inference]' && \
+    chmod +x ./patching/hydra && ./patching/hydra && \
+    pip install --no-cache-dir fastapi uvicorn pydantic"
+
+# ============================================
+# Environment 4: FoundationPose (Python 3.9)
 # ============================================
 RUN conda create -n foundationpose python=3.9 -y && \
-    conda run -n foundationpose pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
-    conda run -n foundationpose pip install --no-cache-dir -r /app/requirements/foundationpose.txt
+    conda install -n foundationpose -c conda-forge eigen=3.4.0 -y && \
+    conda clean -afy
 
-# Copy application code
-COPY gateway/ /app/gateway/
-COPY sam3_service/ /app/sam3_service/
-COPY sam3d_service/ /app/sam3d_service/
-COPY foundationpose_service/ /app/foundationpose_service/
-COPY scripts/ /app/scripts/
+WORKDIR /app/third_party/FoundationPose
+RUN conda run -n foundationpose pip install --no-cache-dir \
+    torch==2.0.0+cu118 torchvision==0.15.1+cu118 --index-url https://download.pytorch.org/whl/cu118
 
-# Copy third-party code (will be mounted or baked in)
-# These paths should match where the weights expect to find the code
-RUN mkdir -p /app/third_party
+RUN conda run -n foundationpose pip install --no-cache-dir -r requirements.txt && \
+    conda run -n foundationpose pip install --no-cache-dir fastapi uvicorn pydantic
 
-# Make scripts executable
-RUN chmod +x /app/scripts/*.sh
+# Build C++ extensions
+RUN conda run -n foundationpose bash -c "cd mycpp && mkdir -p build && cd build && cmake .. && make"
+RUN conda run -n foundationpose bash -c "cd bundlesdf/mycuda && python setup.py install"
+
+# ============================================
+# Final Setup
+# ============================================
+WORKDIR /app
 
 # Create directories for outputs and logs
 RUN mkdir -p /tmp/spatial_memory/meshes /tmp/spatial_memory/logs
@@ -103,7 +141,11 @@ EXPOSE 8080 8091 8092 8093
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Start all services
+# Entrypoint to copy weights on startup
+COPY scripts/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
 
 

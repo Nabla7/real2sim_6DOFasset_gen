@@ -5,18 +5,24 @@ Production deployment guide for the SAM3 + SAM3D + FoundationPose mesh/pose esti
 ## Quick Start
 
 ```bash
-# 1. Build the Docker image (takes 30-60 minutes)
-./scripts/build_docker.sh
+# 1. Build the Docker image (takes 60-90 minutes due to C++ compilation)
+docker build -t spatial-memory-service:latest .
 
 # 2. Set weights path
 export WEIGHTS_PATH=/path/to/perception_model_weights
 
 # 3. Start the service
-docker-compose -f docker-compose.production.yml up -d
+docker run --gpus all \
+  -p 8080:8080 \
+  -v $WEIGHTS_PATH:/weights:ro \
+  --name spatial-memory \
+  spatial-memory-service:latest
 
 # 4. Check health
 curl http://localhost:8080/health
 ```
+
+**Note:** The build process clones third-party repositories, installs complex dependencies, and compiles C++ extensions. This is a one-time process.
 
 ---
 
@@ -67,17 +73,26 @@ perception_model_weights/
 git clone git@github.com:dimensionalOS/dimos_hosted_services.git
 cd dimos_hosted_services
 
-# Build
-./scripts/build_docker.sh
+# Build (this will take 60-90 minutes)
+docker build -t spatial-memory-service:latest .
 
-# This creates:
-#   - spatial-memory-service:latest
-#   - spatial-memory-service:YYYYMMDD
+# What happens during build:
+# 1. Clones third-party repos (SAM3, SAM3D, FoundationPose)
+# 2. Creates 4 separate conda environments
+# 3. Installs PyTorch with CUDA support for each
+# 4. Installs SAM3D with complex dependencies (Kaolin, etc.)
+# 5. Compiles FoundationPose C++ extensions (mycpp, bundlesdf)
 ```
 
 ### Option 2: Local Development
 
-See `scripts/setup_envs.sh` for setting up conda environments locally.
+See `scripts/start_all.sh` for setting up conda environments locally.
+
+**Important:** Local development requires:
+- Conda/Mamba installed
+- CUDA 12.1+ toolkit
+- Third-party repos cloned to `/workspace/third_party/`
+- Weights in `/workspace/weights/`
 
 ---
 
@@ -225,8 +240,13 @@ docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
 
 **Check logs:**
 ```bash
-docker-compose -f docker-compose.production.yml logs
+docker logs spatial-memory
 ```
+
+**Common issues:**
+- Missing weights: Ensure `/weights` volume is mounted correctly
+- GPU not available: Check `--gpus all` flag and nvidia-container-toolkit
+- Port conflicts: Check if ports 8080-8093 are already in use
 
 ### Out of Memory (OOM)
 
@@ -234,17 +254,45 @@ docker-compose -f docker-compose.production.yml logs
 
 **Solutions:**
 1. Use a GPU with more VRAM (≥48GB minimum, 80GB recommended)
-2. Reduce batch size (set `MAX_JOBS=1` in environment)
-3. Process detections sequentially (already default)
+2. Restart services to clear GPU memory: `docker restart spatial-memory`
+3. Check for orphaned processes: `docker exec spatial-memory nvidia-smi`
+
+**Note:** Worker processes are properly cleaned up on restart (fixed in this version).
 
 ### Slow inference
 
 **Check GPU utilization:**
 ```bash
-docker exec -it spatial-memory-production nvidia-smi
+docker exec -it spatial-memory nvidia-smi
 ```
 
 **Warm-up:** First request is slow due to model loading (30-60s). Subsequent requests are faster.
+
+### Build failures
+
+**SAM3D build fails:**
+- Ensure good internet connection (downloads from NVIDIA NGC, PyPI)
+- Check CUDA version compatibility (needs 12.1+)
+- Retry: `docker build --no-cache -t spatial-memory-service:latest .`
+
+**FoundationPose C++ compilation fails:**
+- Ensure build-essential and cmake are installed (already in Dockerfile)
+- Check for sufficient disk space (≥20GB free)
+- Check eigen library installation
+
+### Service-specific issues
+
+**SAM3D fails with "No module named 'notebook.inference'":**
+- This is fixed in the current version
+- Ensure you're using the latest Dockerfile
+
+**FoundationPose fails with "No such file or directory: weights/...":**
+- This is fixed in the current version via docker-entrypoint.sh
+- Weights are automatically copied on container startup
+
+**Too many detections returned:**
+- Default is now 3 per keyword (was 30)
+- Override with `SAM3_MAX_DETECTIONS` environment variable
 
 ### Individual service debugging
 
@@ -335,10 +383,47 @@ deploy:
 
 ---
 
+## Recent Fixes & Changes
+
+### Version 2024-12-18
+
+**Critical Fixes:**
+1. **SAM3D Import Error Fixed**
+   - Issue: `No module named 'notebook.inference'`
+   - Fix: Changed import pattern to match official SAM3D demo
+   - Added proper path handling for spawned worker processes
+
+2. **SAM3D Pointmap Type Error Fixed**
+   - Issue: `'numpy.ndarray' object has no attribute 'to'`
+   - Fix: Convert numpy arrays to PyTorch tensors before passing to inference
+   - Added handling for invalid depth values (< 0.01m → NaN)
+
+3. **FoundationPose Initialization Fixed**
+   - Issue: `'NoneType' object has no attribute 'vertices'`
+   - Fix: Lazy initialization pattern - load predictors at startup, create estimator on first request
+   - Added automatic weights copying via docker-entrypoint.sh
+
+4. **GPU Memory Leak Fixed**
+   - Issue: Orphaned worker processes not killed on restart
+   - Fix: Updated stop script to kill multiprocessing workers
+   - Prevents 76GB+ GPU memory accumulation
+
+5. **Detection Limit Reduced**
+   - Changed from 30 to 3 detections per keyword
+   - Prevents overwhelming results for common objects
+
+**Docker Build Improvements:**
+- Third-party repositories now cloned during build
+- SAM3D environment uses proper conda environment file
+- FoundationPose C++ extensions compiled automatically
+- All environment variables properly set in supervisord
+
+---
+
 ## Support
 
 For issues or questions:
-1. Check logs: `docker-compose logs -f`
+1. Check logs: `docker logs spatial-memory`
 2. Verify health: `curl http://localhost:8080/health`
 3. Review this guide's troubleshooting section
 4. Open an issue on GitHub
@@ -348,25 +433,45 @@ For issues or questions:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│         Docker Container                 │
-├─────────────────────────────────────────┤
-│                                          │
-│  ┌─────────────────┐                    │
-│  │  Gateway :8080  │ ← API Endpoint     │
-│  └────────┬────────┘                    │
-│           │ Pipeline Orchestration       │
-│           ▼                              │
-│  ┌────────────┐  ┌────────────┐  ┌────┐│
-│  │ SAM3 :8091 │→│SAM3D :8092 │→│FP  ││
-│  │  Segment   │  │   Mesh     │  │Pose││
-│  └────────────┘  └────────────┘  └────┘│
-│                                          │
-│  Weights: /weights (read-only mount)    │
-│  Output:  /tmp/spatial_memory/meshes    │
-│  Logs:    /tmp/spatial_memory/logs      │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│              Docker Container                            │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  ┌─────────────────┐                                    │
+│  │  Gateway :8080  │ ← API Endpoint                     │
+│  └────────┬────────┘                                    │
+│           │ Pipeline Orchestration                       │
+│           ▼                                              │
+│  ┌────────────┐  ┌────────────┐  ┌──────────────┐     │
+│  │ SAM3 :8091 │→│SAM3D :8092 │→│FP :8093      │     │
+│  │  Segment   │  │   Mesh     │  │Pose Estimate │     │
+│  └────────────┘  └────────────┘  └──────────────┘     │
+│                                                          │
+│  Conda Environments:                                     │
+│  • gateway (Python 3.11, CPU)                           │
+│  • sam3 (Python 3.11, CUDA 12.1)                        │
+│  • sam3d-objects (Python 3.11, CUDA 12.1 + Kaolin)     │
+│  • foundationpose (Python 3.9, CUDA 11.8)               │
+│                                                          │
+│  Third-party repos:                                      │
+│  • /app/third_party/sam3                                │
+│  • /app/third_party/sam-3d-objects                      │
+│  • /app/third_party/FoundationPose                      │
+│                                                          │
+│  Volumes:                                                │
+│  • /weights (read-only mount) → Model weights           │
+│  • /tmp/spatial_memory/meshes → Generated meshes        │
+│  • /tmp/spatial_memory/logs → Service logs              │
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Pipeline Parallelism:** Each stage processes different requests concurrently (assembly-line style).
+
+**Key Fixes Applied:**
+- ✅ Third-party repos cloned during build
+- ✅ SAM3D uses proper conda environment with all dependencies
+- ✅ FoundationPose C++ extensions compiled during build
+- ✅ Weights automatically copied to correct locations on startup
+- ✅ Worker processes properly cleaned up (no GPU memory leaks)
+- ✅ Detection limit reduced to 3 per keyword (was 30)
 

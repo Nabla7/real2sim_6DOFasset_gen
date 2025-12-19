@@ -97,20 +97,35 @@ Expected structure at `/weights`:
 ## Quick Start (Production)
 
 ```bash
-# 1. Build the production image (30-60 minutes)
-./scripts/build_docker.sh
+# 1. Build the Docker image (60-90 minutes - clones repos, compiles C++)
+docker build -t spatial-memory-service:latest .
 
 # 2. Set weights path
 export WEIGHTS_PATH=/path/to/perception_model_weights
 
 # 3. Start the service
-docker-compose -f docker-compose.production.yml up -d
+docker run --gpus all \
+  -p 8080:8080 \
+  -v $WEIGHTS_PATH:/weights:ro \
+  --name spatial-memory \
+  spatial-memory-service:latest
 
 # 4. Test
-./scripts/test_deployment.sh
+curl http://localhost:8080/health
 ```
 
 **For full production deployment guide, see [DEPLOYMENT.md](DEPLOYMENT.md)**
+
+### What Happens During Build
+
+The Docker build process:
+1. ✅ Clones third-party repos (SAM3, SAM3D, FoundationPose)
+2. ✅ Creates 4 conda environments with proper dependencies
+3. ✅ Installs SAM3D with complex NVIDIA dependencies (Kaolin, etc.)
+4. ✅ Compiles FoundationPose C++ extensions
+5. ✅ Sets up all environment variables and paths
+
+**Note:** This is a one-time build. Subsequent starts are instant.
 
 ## Running with Docker (Development)
 
@@ -183,6 +198,8 @@ if response.success:
 |----------|---------|-------------|
 | `WEIGHTS_DIR` | `/weights` | Path to model weights |
 | `MESH_OUTPUT_DIR` | `/tmp/spatial_memory/meshes` | Mesh output directory |
+| `SAM3D_PATH` | `/app/third_party/sam-3d-objects` | SAM3D repository path |
+| `FOUNDATIONPOSE_PATH` | `/app/third_party/FoundationPose` | FoundationPose repository path |
 | `GATEWAY_PORT` | `8080` | Gateway service port |
 | `SAM3_PORT` | `8091` | SAM3 service port |
 | `SAM3D_PORT` | `8092` | SAM3D service port |
@@ -190,5 +207,20 @@ if response.success:
 | `SAM3_TIMEOUT` | `60` | SAM3 request timeout (seconds) |
 | `SAM3D_TIMEOUT` | `300` | SAM3D request timeout (seconds) |
 | `FOUNDATIONPOSE_TIMEOUT` | `120` | FoundationPose request timeout |
+| `SAM3_MAX_DETECTIONS` | `3` | Max detections per keyword |
+| `SAM3_DEFAULT_CONF` | `0.30` | Default confidence threshold |
+
+## Known Issues & Fixes
+
+All critical issues have been resolved in the current version:
+
+✅ **SAM3D import errors** - Fixed via proper path handling  
+✅ **FoundationPose initialization failures** - Fixed via lazy loading  
+✅ **GPU memory leaks** - Fixed via proper worker cleanup  
+✅ **Too many detections** - Reduced from 30 to 3 per keyword  
+✅ **Missing dependencies** - All third-party repos cloned during build  
+✅ **C++ compilation** - FoundationPose extensions built automatically
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed troubleshooting.
 
 

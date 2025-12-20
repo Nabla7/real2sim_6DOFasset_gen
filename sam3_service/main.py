@@ -67,7 +67,9 @@ MAX_DETECTIONS = int(os.getenv("SAM3_MAX_DETECTIONS", "3"))
 
 class SegmentRequest(BaseModel):
     image_b64: str
-    text_prompts: List[str] = ["object"]
+    text_prompts: Optional[List[str]] = ["object"]
+    box_prompts: Optional[List[List[float]]] = None  # [[x1,y1,x2,y2], ...]
+    use_box_prompt: bool = False  # If True, use box prompts instead of text
     confidence_threshold: Optional[float] = None
 
 
@@ -195,58 +197,121 @@ def segment(req: SegmentRequest) -> SegmentResponse:
     try:
         # Set image once (computes image embeddings)
         inference_state = processor.set_image(pil_image)
-
-        # Process each text prompt separately (as per SAM3 paper)
-        prompts = req.text_prompts if req.text_prompts else ["object"]
         detections: List[DetectionResponse] = []
 
-        for prompt_text in prompts:
-            prompt_text = (prompt_text or "").strip()
-            if not prompt_text:
-                continue
-
-            # Reset prompts for this concept
-            processor.reset_all_prompts(inference_state)
-            output = processor.set_text_prompt(
-                state=inference_state,
-                prompt=prompt_text,
-            )
-
-            masks = output["masks"]  # [N, H, W] tensor
-            boxes = output["boxes"]  # [N, 4] tensor
-            scores = output["scores"]  # [N] tensor
-
-            logger.info(
-                f"SAM3 concept '{prompt_text}' -> masks={tuple(masks.shape)} "
-                f"boxes={tuple(boxes.shape)} scores={tuple(scores.shape)}"
-            )
-
-            scores_np = scores.detach().cpu().numpy()
-            sorted_indices = scores_np.argsort()[::-1]
-
-            for idx in sorted_indices[:MAX_DETECTIONS]:
-                score = float(scores_np[idx])
-                if score < threshold:
-                    break
-
-                box = boxes[idx].tolist()
-                mask_tensor = masks[idx]
-
-                # Convert mask to PNG
-                mask_np = mask_tensor.squeeze().cpu().numpy().astype(bool)
-                mask_img = Image.fromarray((mask_np * 255).astype("uint8"))
-                buf = io.BytesIO()
-                mask_img.save(buf, format="PNG")
-                mask_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-
-                detections.append(
-                    DetectionResponse(
-                        bbox=[float(v) for v in box],
-                        class_name=prompt_text,
-                        confidence=score,
-                        mask=mask_b64,
-                    )
+        # Determine prompting mode
+        if req.use_box_prompt and req.box_prompts:
+            # Mode: Box-only prompts (for YOLO-E with garbage labels)
+            logger.info(f"Using box prompts (count={len(req.box_prompts)})")
+            
+            for box_xyxy in req.box_prompts:
+                # Convert [x1, y1, x2, y2] to [cx, cy, w, h] normalized [0, 1]
+                img_w, img_h = pil_image.size
+                x1, y1, x2, y2 = box_xyxy
+                cx = ((x1 + x2) / 2) / img_w
+                cy = ((y1 + y2) / 2) / img_h
+                w = (x2 - x1) / img_w
+                h = (y2 - y1) / img_h
+                box_cxcywh = [cx, cy, w, h]
+                
+                # Reset prompts
+                processor.reset_all_prompts(inference_state)
+                
+                # Add box prompt (label=True for positive box)
+                output = processor.add_geometric_prompt(
+                    box=box_cxcywh,
+                    label=True,
+                    state=inference_state,
                 )
+                
+                masks = output["masks"]  # [N, H, W] tensor
+                boxes = output["boxes"]  # [N, 4] tensor
+                scores = output["scores"]  # [N] tensor
+                
+                logger.info(
+                    f"SAM3 box prompt -> masks={tuple(masks.shape)} "
+                    f"boxes={tuple(boxes.shape)} scores={tuple(scores.shape)}"
+                )
+                
+                scores_np = scores.detach().cpu().numpy()
+                sorted_indices = scores_np.argsort()[::-1]
+                
+                for idx in sorted_indices[:MAX_DETECTIONS]:
+                    score = float(scores_np[idx])
+                    if score < threshold:
+                        break
+                    
+                    box = boxes[idx].tolist()
+                    mask_tensor = masks[idx]
+                    
+                    # Convert mask to PNG
+                    mask_np = mask_tensor.squeeze().cpu().numpy().astype(bool)
+                    mask_img = Image.fromarray((mask_np * 255).astype("uint8"))
+                    buf = io.BytesIO()
+                    mask_img.save(buf, format="PNG")
+                    mask_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                    
+                    detections.append(
+                        DetectionResponse(
+                            bbox=[float(v) for v in box],
+                            class_name="box_prompt",  # Generic label for box-based
+                            confidence=score,
+                            mask=mask_b64,
+                        )
+                    )
+        
+        else:
+            # Mode: Text prompts (original behavior)
+            prompts = req.text_prompts if req.text_prompts else ["object"]
+            logger.info(f"Using text prompts: {prompts}")
+            
+            for prompt_text in prompts:
+                prompt_text = (prompt_text or "").strip()
+                if not prompt_text:
+                    continue
+
+                # Reset prompts for this concept
+                processor.reset_all_prompts(inference_state)
+                output = processor.set_text_prompt(
+                    state=inference_state,
+                    prompt=prompt_text,
+                )
+
+                masks = output["masks"]  # [N, H, W] tensor
+                boxes = output["boxes"]  # [N, 4] tensor
+                scores = output["scores"]  # [N] tensor
+
+                logger.info(
+                    f"SAM3 concept '{prompt_text}' -> masks={tuple(masks.shape)} "
+                    f"boxes={tuple(boxes.shape)} scores={tuple(scores.shape)}"
+                )
+
+                scores_np = scores.detach().cpu().numpy()
+                sorted_indices = scores_np.argsort()[::-1]
+
+                for idx in sorted_indices[:MAX_DETECTIONS]:
+                    score = float(scores_np[idx])
+                    if score < threshold:
+                        break
+
+                    box = boxes[idx].tolist()
+                    mask_tensor = masks[idx]
+
+                    # Convert mask to PNG
+                    mask_np = mask_tensor.squeeze().cpu().numpy().astype(bool)
+                    mask_img = Image.fromarray((mask_np * 255).astype("uint8"))
+                    buf = io.BytesIO()
+                    mask_img.save(buf, format="PNG")
+                    mask_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+                    detections.append(
+                        DetectionResponse(
+                            bbox=[float(v) for v in box],
+                            class_name=prompt_text,
+                            confidence=score,
+                            mask=mask_b64,
+                        )
+                    )
 
     except Exception as e:
         logger.error(f"SAM 3 inference error: {e}")

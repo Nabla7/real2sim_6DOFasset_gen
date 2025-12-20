@@ -55,10 +55,12 @@ class ProcessRequest(BaseModel):
     K: List[List[float]] = Field(
         ..., description="Camera intrinsics matrix 3x3: [[fx,0,cx],[0,fy,cy],[0,0,1]]"
     )
-    label: str = Field(..., description="Object label from YOLO-E detection")
+    label: str = Field("", description="Object label (optional if use_box_prompt=True)")
     bbox: List[float] = Field(
-        ..., description="2D bounding box [x1, y1, x2, y2] from YOLO-E"
+        ..., description="2D bounding box [x1, y1, x2, y2]"
     )
+    # Segmentation mode
+    use_box_prompt: bool = Field(False, description="Use bbox as geometric prompt (ignore label)")
     # Optional grasp generation
     include_grasps: bool = Field(False, description="Include grasp pose generation")
     filter_collisions: bool = Field(True, description="Filter collision grasps (if include_grasps=True)")
@@ -114,8 +116,9 @@ class GraspRequest(BaseModel):
     K: List[List[float]] = Field(
         ..., description="Camera intrinsics matrix 3x3"
     )
-    label: str = Field(..., description="Object label")
+    label: str = Field("", description="Object label (optional if use_box_prompt=True)")
     bbox: List[float] = Field(..., description="2D bounding box [x1, y1, x2, y2]")
+    use_box_prompt: bool = Field(False, description="Use bbox as geometric prompt (ignore label)")
     filter_collisions: bool = Field(True, description="Filter colliding grasps")
     gripper_type: str = Field("robotiq_2f_140", description="Gripper type")
     num_grasps: int = Field(400, description="Number of grasps to generate")
@@ -221,10 +224,18 @@ async def grasp(request: GraspRequest) -> GraspResponse:
     
     try:
         # Call SAM3 first to get segmentation mask
-        sam3_payload = {
-            "image_b64": request.image_rgb_b64,
-            "text_prompts": [request.label],
-        }
+        if request.use_box_prompt:
+            sam3_payload = {
+                "image_b64": request.image_rgb_b64,
+                "box_prompts": [request.bbox],
+                "use_box_prompt": True,
+            }
+        else:
+            sam3_payload = {
+                "image_b64": request.image_rgb_b64,
+                "text_prompts": [request.label] if request.label else ["object"],
+                "use_box_prompt": False,
+            }
         
         import aiohttp
         async with aiohttp.ClientSession() as session:

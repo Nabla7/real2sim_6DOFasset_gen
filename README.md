@@ -171,11 +171,17 @@ curl -X POST http://localhost:8080/process \
 | `image_rgb_b64` | string | required | Base64-encoded RGB PNG |
 | `depth_b64` | string | required | Base64-encoded float32 depth array (meters) |
 | `K` | float[][] | required | 3x3 camera intrinsics matrix |
-| `label` | string | required | Object label (e.g. "bottle", "cup") |
+| `label` | string | "" | Object label (e.g. "bottle", "cup") |
 | `bbox` | float[] | required | 2D bbox [x1, y1, x2, y2] |
+| `use_box_prompt` | bool | false | Use bbox as geometric prompt (ignore label) |
 | `include_grasps` | bool | false | Include grasp generation |
 | `filter_collisions` | bool | true | Filter colliding grasps (requires depth) |
 | `gripper_type` | string | "robotiq_2f_140" | "robotiq_2f_140" \| "franka_panda" \| "single_suction_cup_30mm" |
+
+**Segmentation Modes:**
+- **Text-based** (`use_box_prompt=false`): Uses `label` as text prompt (e.g. "red coffee mug")
+- **Box-based** (`use_box_prompt=true`): Uses `bbox` as geometric prompt, ignores `label`
+  - **Use this when YOLO-E labels are garbage** but bounding boxes are accurate
 
 ---
 
@@ -184,6 +190,7 @@ curl -X POST http://localhost:8080/process \
 **Direct grasp generation without mesh/pose reconstruction**
 
 ```bash
+# With text label
 curl -X POST http://localhost:8080/grasp \
   -H "Content-Type: application/json" \
   -d '{
@@ -192,10 +199,21 @@ curl -X POST http://localhost:8080/grasp \
     "K": [[615.0, 0, 320], [0, 615, 240], [0, 0, 1]],
     "label": "bottle",
     "bbox": [120, 80, 200, 280],
+    "use_box_prompt": false,
     "filter_collisions": true,
-    "gripper_type": "robotiq_2f_140",
-    "num_grasps": 400,
-    "topk_num_grasps": 100
+    "gripper_type": "robotiq_2f_140"
+  }'
+
+# With box-only (for YOLO-E garbage labels)
+curl -X POST http://localhost:8080/grasp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_rgb_b64": "iVBORw0KGgoAAAANS...",
+    "depth_b64": "AAAAAAAAAAAAAAAA...",
+    "K": [[615.0, 0, 320], [0, 615, 240], [0, 0, 1]],
+    "bbox": [120, 80, 200, 280],
+    "use_box_prompt": true,
+    "filter_collisions": true
   }'
 ```
 
@@ -243,6 +261,28 @@ Expected timings on NVIDIA A100-80GB:
 | **Grasp-only** | 5-10s | SAM3 (2s) + GraspGen (3-8s) |
 
 *FoundationPose and GraspGen run in parallel after SAM3D completes.*
+
+---
+
+## When to Use Box vs Text Prompts
+
+| Scenario | Mode | Why |
+|----------|------|-----|
+| **YOLO-E detections** | `use_box_prompt=true` | YOLO-E labels are generic ("object_27"), but bboxes are accurate |
+| **Manual annotations** | `use_box_prompt=false` | Human-provided labels are descriptive ("red coffee mug") |
+| **Known objects** | `use_box_prompt=false` | Text helps SAM3 understand what to segment |
+| **Unknown objects** | `use_box_prompt=true` | Just segment whatever is in the box |
+
+**Example: YOLO-E Integration**
+```python
+# YOLO-E gives you: bbox=[120, 80, 200, 280], label="object_27" (useless!)
+response = requests.post("http://localhost:8080/grasp", json={
+    "bbox": [120, 80, 200, 280],
+    "use_box_prompt": True,  # Ignore the garbage label
+    "label": "",  # Optional, not used
+    ...
+})
+```
 
 ---
 

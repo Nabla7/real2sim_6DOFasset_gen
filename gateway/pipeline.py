@@ -139,10 +139,23 @@ class Pipeline:
             logger.info(f"[{job.request_id}] SAM3: Processing")
             try:
                 # Call SAM3 service
-                payload = {
-                    "image_b64": job.request["image_rgb_b64"],
-                    "text_prompts": [job.request["label"]],
-                }
+                use_box = job.request.get("use_box_prompt", False)
+                
+                if use_box:
+                    # Box-only mode (for YOLO-E with garbage labels)
+                    payload = {
+                        "image_b64": job.request["image_rgb_b64"],
+                        "box_prompts": [job.request["bbox"]],
+                        "use_box_prompt": True,
+                    }
+                else:
+                    # Text-based mode (original)
+                    label = job.request.get("label", "object")
+                    payload = {
+                        "image_b64": job.request["image_rgb_b64"],
+                        "text_prompts": [label] if label else ["object"],
+                        "use_box_prompt": False,
+                    }
 
                 async with self._session.post(
                     f"{SAM3_URL}/segment",

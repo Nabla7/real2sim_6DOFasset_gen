@@ -174,7 +174,27 @@ class InferenceWorker(mp.Process):
 
                 if "glb" in output and output["glb"] is not None:
                     try:
-                        output["glb"].export(str(mesh_output_path))
+                        mesh_glb = output["glb"]
+                        
+                        # Apply scale from pointmap normalization to transform from
+                        # canonical space to real-world metric scale
+                        if "scale" in output and output["scale"] is not None:
+                            scale_tensor = output["scale"]
+                            if hasattr(scale_tensor, 'squeeze'):
+                                # Tensor: scale is typically (1, 3) or (3,), use first value for uniform
+                                scale_val = float(scale_tensor.squeeze()[0].item())
+                            else:
+                                scale_val = float(scale_tensor)
+                            
+                            if scale_val > 0 and scale_val != 1.0:
+                                mesh_glb.vertices *= scale_val
+                                worker_logger.info(f"Applied scale factor {scale_val:.4f} to mesh")
+                            else:
+                                worker_logger.info(f"Scale factor is {scale_val:.4f}, skipping scaling")
+                        else:
+                            worker_logger.warning("No scale in output, mesh will be in canonical space")
+                        
+                        mesh_glb.export(str(mesh_output_path))
                         result["mesh_path"] = str(mesh_output_path)
                         result["mesh_id"] = req_id
                         worker_logger.info(f"Saved OBJ to {mesh_output_path}")

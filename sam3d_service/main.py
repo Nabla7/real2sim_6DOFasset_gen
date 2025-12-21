@@ -59,6 +59,12 @@ SAM3D_WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "sam3d-objects")
 SAM3D_CONFIG = os.path.join(SAM3D_WEIGHTS_PATH, "pipeline.yaml")
 OUTPUT_DIR = Path(os.getenv("MESH_OUTPUT_DIR", "/tmp/spatial_memory/meshes"))
 
+# Pointmap validity thresholds (mask-aware)
+# If too few pixels inside the mask have valid depth, passing a pointmap tends to
+# produce badly scaled meshes and cascades into FoundationPose failures.
+POINTMAP_MIN_VALID_RATIO = float(os.getenv("SAM3D_POINTMAP_MIN_VALID_RATIO", "0.30"))
+POINTMAP_MIN_VALID_PIXELS = int(os.getenv("SAM3D_POINTMAP_MIN_VALID_PIXELS", "2000"))
+
 
 def compute_pointmap_from_depth(depth: np.ndarray, K: np.ndarray) -> np.ndarray:
     """
@@ -337,8 +343,50 @@ def reconstruct(req: ReconstructRequest) -> ReconstructResponse:
                 depth_img = Image.open(io.BytesIO(depth_bytes))
                 depth_np = np.array(depth_img).astype(np.float32) / 1000.0
 
-            pointmap = compute_pointmap_from_depth(depth_np, np.array(req.K))
-            logger.info(f"Pointmap computed: shape={pointmap.shape}, range=[{pointmap.min():.3f}, {pointmap.max():.3f}]")
+            # Mask-aware validation: only trust depth scaling if enough of the mask
+            # has valid (finite, >1cm) depth. Otherwise, fall back to internal scaling.
+            mask_area = int(mask_np.sum())
+            depth_masked = depth_np.astype(np.float32, copy=False).copy()
+            depth_masked[~mask_np] = np.nan
+
+            valid = np.isfinite(depth_masked) & (depth_masked >= 0.01)
+            valid_pixels = int(valid.sum())
+            valid_ratio = (valid_pixels / mask_area) if mask_area > 0 else 0.0
+
+            # Log meaningful ranges (nan-safe)
+            try:
+                dmin = float(np.nanmin(depth_masked))
+                dmax = float(np.nanmax(depth_masked))
+                depth_range_str = f"[{dmin:.3f}, {dmax:.3f}]"
+            except Exception:
+                depth_range_str = "[nan, nan]"
+
+            logger.info(
+                "Depth(masked) stats: "
+                f"mask_area={mask_area}, valid_pixels={valid_pixels}, "
+                f"valid_ratio={valid_ratio:.3f}, range={depth_range_str}"
+            )
+
+            if (
+                mask_area >= 1
+                and valid_pixels >= POINTMAP_MIN_VALID_PIXELS
+                and valid_ratio >= POINTMAP_MIN_VALID_RATIO
+            ):
+                pointmap = compute_pointmap_from_depth(depth_masked, np.array(req.K))
+                try:
+                    pmin = float(np.nanmin(pointmap))
+                    pmax = float(np.nanmax(pointmap))
+                    prange = f"[{pmin:.3f}, {pmax:.3f}]"
+                except Exception:
+                    prange = "[nan, nan]"
+                logger.info(f"Pointmap computed: shape={pointmap.shape}, range={prange}")
+            else:
+                logger.warning(
+                    "Insufficient valid in-mask depth for pointmap scaling; "
+                    "falling back to internal SAM3D scaling. "
+                    f"(min_valid_ratio={POINTMAP_MIN_VALID_RATIO:.2f}, "
+                    f"min_valid_pixels={POINTMAP_MIN_VALID_PIXELS})"
+                )
 
         req_id = str(uuid.uuid4())
         logger.info(f"Queueing reconstruction request {req_id}")

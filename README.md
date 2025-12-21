@@ -16,14 +16,16 @@ Combines state-of-the-art models from Meta and NVIDIA into a single REST API for
 ```
 POST /process?include_grasps=true
 
-RGB + Depth + Label → Mesh + Pose + Grasps
-Time: ~20-45 seconds
+RGB + Depth + Label → Mesh ID + Pose + Grasps
+Time: ~20-45 seconds (response immediate, mesh download <1s)
 ```
 
 **Use when you need:**
-- 3D mesh for visualization/simulation
+- 3D mesh for visualization/simulation (download via GET /mesh/{id})
 - Object pose for tracking/manipulation
 - Collision-free grasp candidates
+
+**Note:** Meshes are automatically decimated to 1-5MB (down from 25-60MB) and downloaded separately.
 
 ### Fast Pipeline: Grasp-Only
 ```
@@ -116,7 +118,9 @@ tail -f logs/*.log
 
 ### POST /process - Full Pipeline
 
-**Complete object understanding: mesh + pose + grasps**
+**Complete object understanding: mesh ID + pose + grasps**
+
+Returns metadata immediately (~500 bytes). Download mesh separately via `GET /mesh/{id}`.
 
 ```bash
 curl -X POST http://localhost:8080/process \
@@ -137,7 +141,7 @@ curl -X POST http://localhost:8080/process \
 ```json
 {
   "label": "bottle",
-  "mesh_b64": "dmVydGV4IDAuMDE1IC0wLjA4...",
+  "mesh_id": "a3f2c91b-4e7d-4a1c-8b3e-123456789abc",
   "pose": {
     "position": {"x": 0.15, "y": -0.08, "z": 0.72},
     "orientation": {"x": 0.0, "y": 0.0, "z": 0.1, "w": 0.995}
@@ -182,6 +186,37 @@ curl -X POST http://localhost:8080/process \
 - **Text-based** (`use_box_prompt=false`): Uses `label` as text prompt (e.g. "red coffee mug")
 - **Box-based** (`use_box_prompt=true`): Uses `bbox` as geometric prompt, ignores `label`
   - **Use this when YOLO-E labels are garbage** but bounding boxes are accurate
+
+**Mesh Download:**
+The response includes a `mesh_id` instead of embedded mesh data. Download the mesh separately:
+
+```bash
+# After receiving mesh_id from /process response
+curl http://localhost:8080/mesh/a3f2c91b-4e7d-4a1c-8b3e-123456789abc \
+  --output object.obj
+```
+
+Meshes are automatically decimated to ~1-5MB (down from 25-60MB) while preserving visual quality.
+
+---
+
+### GET /mesh/{mesh_id} - Download Mesh Artifact
+
+**Download a generated 3D mesh by ID**
+
+```bash
+curl http://localhost:8080/mesh/a3f2c91b-4e7d-4a1c-8b3e-123456789abc \
+  --output bottle.obj
+```
+
+**Response:**
+- Content-Type: `application/octet-stream`
+- Body: Raw OBJ file (1-5MB, decimated)
+
+**Features:**
+- Automatic mesh decimation (~50k triangles or 10% of original)
+- Cached on server for fast repeated downloads
+- Standard OBJ format compatible with all 3D tools
 
 ---
 
@@ -258,9 +293,15 @@ Expected timings on NVIDIA A100-80GB:
 | Pipeline | Time | Breakdown |
 |----------|------|-----------|
 | **Full** (mesh + pose + grasps) | 20-45s | SAM3 (2s) + SAM3D (15-30s) + FP\\|\\|GG (5-10s) |
+| **Mesh download** | <1s | Separate GET request (1-5MB decimated mesh) |
 | **Grasp-only** | 5-10s | SAM3 (2s) + GraspGen (3-8s) |
 
 *FoundationPose and GraspGen run in parallel after SAM3D completes.*
+
+**Response Sizes:**
+- `/process` response: ~500 bytes (metadata only, no mesh)
+- `/mesh/{id}` download: 1-5MB (decimated from 25-60MB original)
+- `/grasp` response: ~50KB (100 grasp poses)
 
 ---
 
@@ -299,7 +340,7 @@ rgb_png = encode_image_to_base64(rgb_image)  # Your PNG encoder
 depth_bytes = depth_array.astype(np.float32).tobytes()
 depth_b64 = base64.b64encode(depth_bytes).decode()
 
-# Full pipeline with grasps
+# Step 1: Full pipeline with grasps (returns metadata + mesh_id)
 response = requests.post("http://localhost:8080/process", json={
     "image_rgb_b64": rgb_png,
     "depth_b64": depth_b64,
@@ -313,13 +354,23 @@ response = requests.post("http://localhost:8080/process", json={
 
 result = response.json()
 
-# Extract results
-mesh_obj = base64.b64decode(result["mesh_b64"])
+# Extract metadata (fast response, ~500 bytes)
+mesh_id = result["mesh_id"]
 pose = result["pose"]  # Single object pose
 grasps = result["grasps"]  # List of ~100 grasp candidates
 
 print(f"Found {len(grasps)} collision-free grasps")
 print(f"Best grasp score: {max(g['score'] for g in grasps):.3f}")
+
+# Step 2: Download mesh separately if needed (1-5MB)
+if mesh_id:
+    mesh_response = requests.get(f"http://localhost:8080/mesh/{mesh_id}")
+    mesh_obj = mesh_response.content  # Raw OBJ bytes
+    
+    # Save to file
+    with open(f"bottle_{mesh_id}.obj", "wb") as f:
+        f.write(mesh_obj)
+    print(f"Mesh saved: {len(mesh_obj)} bytes")
 
 # Use top grasp
 best_grasp = max(grasps, key=lambda g: g["score"])

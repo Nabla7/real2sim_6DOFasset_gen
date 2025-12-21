@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import open3d as o3d
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -176,6 +175,7 @@ class InferenceWorker(mp.Process):
 
                         # Decimate mesh to reduce file size
                         try:
+                            import open3d as o3d
                             mesh = o3d.io.read_triangle_mesh(str(mesh_output_path))
                             original_triangles = len(mesh.triangles)
                             

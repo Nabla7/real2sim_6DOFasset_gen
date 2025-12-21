@@ -41,7 +41,7 @@ class PipelineJob:
     # Intermediate results passed between stages
     mask_b64: Optional[str] = None
     mesh_path: Optional[str] = None
-    mesh_b64: Optional[str] = None
+    mesh_id: Optional[str] = None
     grasps: Optional[List[Dict]] = None
     error: Optional[str] = None
     # Track completion of parallel stages (FP + GraspGen)
@@ -233,9 +233,9 @@ class Pipeline:
 
                 job.mesh_path = mesh_path
 
-                # Also get mesh as base64 if provided
-                if "mesh_b64" in result:
-                    job.mesh_b64 = result["mesh_b64"]
+                # Also get mesh_id if provided
+                if "mesh_id" in result:
+                    job.mesh_id = result["mesh_id"]
 
                 # Check if grasps are requested
                 include_grasps = job.request.get("include_grasps", False)
@@ -297,7 +297,7 @@ class Pipeline:
                     # Build final response (no grasps)
                     response = {
                         "label": job.request["label"],
-                        "mesh_b64": job.mesh_b64,
+                        "mesh_id": job.mesh_id,
                         "pose": result.get("pose"),
                         "bbox_3d": result.get("size"),
                         "confidence": result.get("confidence", 1.0),
@@ -353,7 +353,7 @@ class Pipeline:
                     # Both stages done, build final response
                     response = {
                         "label": job.request["label"],
-                        "mesh_b64": job.mesh_b64,
+                        "mesh_id": job.mesh_id,
                         "pose": job.fp_result.get("pose"),
                         "bbox_3d": job.fp_result.get("size"),
                         "confidence": job.fp_result.get("confidence", 1.0),
@@ -371,7 +371,7 @@ class Pipeline:
                 if job.fp_complete:
                     response = {
                         "label": job.request["label"],
-                        "mesh_b64": job.mesh_b64,
+                        "mesh_id": job.mesh_id,
                         "pose": job.fp_result.get("pose"),
                         "bbox_3d": job.fp_result.get("size"),
                         "confidence": job.fp_result.get("confidence", 1.0),

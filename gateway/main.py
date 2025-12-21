@@ -14,11 +14,13 @@ from typing import Any, Dict, List, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .config import (
     GATEWAY_HOST,
     GATEWAY_PORT,
+    MESH_OUTPUT_DIR,
     SAM3_URL,
     SAM3_TIMEOUT,
     GRASPGEN_URL,
@@ -101,7 +103,7 @@ class ProcessResponse(BaseModel):
     """Response from the spatial memory pipeline."""
 
     label: str
-    mesh_b64: Optional[str] = Field(None, description="Base64-encoded .obj mesh file")
+    mesh_id: Optional[str] = Field(None, description="ID for mesh download via GET /mesh/{id}")
     pose: Optional[Pose] = Field(None, description="6D pose in camera frame")
     bbox_3d: Optional[BBox3D] = Field(None, description="3D bounding box dimensions")
     confidence: float = Field(1.0, description="Detection confidence")
@@ -165,6 +167,19 @@ async def health() -> Dict[str, Any]:
     }
 
 
+@app.get("/mesh/{mesh_id}")
+async def download_mesh(mesh_id: str):
+    """Download a generated mesh by ID."""
+    mesh_path = Path(MESH_OUTPUT_DIR) / f"{mesh_id}.obj"
+    if not mesh_path.exists():
+        raise HTTPException(status_code=404, detail=f"Mesh {mesh_id} not found")
+    return FileResponse(
+        path=mesh_path,
+        media_type="application/octet-stream",
+        filename=f"{mesh_id}.obj"
+    )
+
+
 @app.post("/process", response_model=ProcessResponse)
 async def process(request: ProcessRequest) -> ProcessResponse:
     """
@@ -200,7 +215,7 @@ async def process(request: ProcessRequest) -> ProcessResponse:
 
         return ProcessResponse(
             label=result.get("label", request.label),
-            mesh_b64=result.get("mesh_b64"),
+            mesh_id=result.get("mesh_id"),
             pose=pose,
             bbox_3d=bbox_3d,
             confidence=result.get("confidence", 1.0),

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import open3d as o3d
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -159,7 +160,7 @@ class InferenceWorker(mp.Process):
                 ply_output_path = Path(self.output_dir) / f"{req_id}.ply"
                 mesh_output_path = Path(self.output_dir) / f"{req_id}.obj"
 
-                result = {"ply_path": None, "mesh_path": None, "mesh_b64": None}
+                result = {"ply_path": None, "mesh_path": None, "mesh_id": None}
 
                 if "gs" in output:
                     output["gs"].save_ply(str(ply_output_path))
@@ -170,11 +171,28 @@ class InferenceWorker(mp.Process):
                     try:
                         output["glb"].export(str(mesh_output_path))
                         result["mesh_path"] = str(mesh_output_path)
+                        result["mesh_id"] = req_id
                         worker_logger.info(f"Saved OBJ to {mesh_output_path}")
 
-                        # Also encode mesh as base64 for response
-                        with open(mesh_output_path, "rb") as f:
-                            result["mesh_b64"] = base64.b64encode(f.read()).decode("utf-8")
+                        # Decimate mesh to reduce file size
+                        try:
+                            mesh = o3d.io.read_triangle_mesh(str(mesh_output_path))
+                            original_triangles = len(mesh.triangles)
+                            
+                            # Target: reduce to ~50k triangles or 10% of original, whichever is smaller
+                            target_triangles = min(50000, int(original_triangles * 0.1))
+                            if original_triangles > target_triangles:
+                                mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=target_triangles)
+                                o3d.io.write_triangle_mesh(str(mesh_output_path), mesh)
+                                worker_logger.info(
+                                    f"Decimated mesh: {original_triangles} -> {len(mesh.triangles)} triangles"
+                                )
+                            else:
+                                worker_logger.info(
+                                    f"Mesh already small ({original_triangles} triangles), skipping decimation"
+                                )
+                        except Exception as e:
+                            worker_logger.warning(f"Mesh decimation failed (using original): {e}")
 
                     except Exception as e:
                         worker_logger.warning(f"Failed to export mesh: {e}")
@@ -260,7 +278,7 @@ class ReconstructRequest(BaseModel):
 class ReconstructResponse(BaseModel):
     ply_path: Optional[str] = None
     mesh_path: Optional[str] = None
-    mesh_b64: Optional[str] = None  # Base64-encoded .obj file
+    mesh_id: Optional[str] = None  # Mesh ID for download via GET /mesh/{id}
 
 
 # --- FastAPI App ---
@@ -336,7 +354,7 @@ def reconstruct(req: ReconstructRequest) -> ReconstructResponse:
         return ReconstructResponse(
             ply_path=result.get("ply_path"),
             mesh_path=result.get("mesh_path"),
-            mesh_b64=result.get("mesh_b64"),
+            mesh_id=result.get("mesh_id"),
         )
 
     except HTTPException:

@@ -17,6 +17,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import cv2
 import numpy as np
 import torch
 import trimesh
@@ -24,6 +25,226 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from PIL import Image
 from pydantic import BaseModel, Field
+
+
+# --- Debug Visualization Utilities ---
+
+DEBUG_DIR = Path(os.getenv("DEBUG_DIR", "/workspace/debug"))
+DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_color_from_score(score: float) -> tuple:
+    """Convert score (0-1) to BGR color (red=bad, green=good)."""
+    # score 0 -> red (0, 0, 255), score 1 -> green (0, 255, 0)
+    r = int(255 * (1 - score))
+    g = int(255 * score)
+    return (0, g, r)  # BGR for OpenCV
+
+
+def project_points_to_image(points_3d: np.ndarray, K: np.ndarray) -> np.ndarray:
+    """Project 3D points to 2D image coordinates using camera intrinsics.
+    
+    Args:
+        points_3d: (N, 3) array of 3D points in camera frame
+        K: 3x3 camera intrinsics matrix
+    
+    Returns:
+        (N, 2) array of 2D pixel coordinates
+    """
+    # Project: p_2d = K @ p_3d / z
+    points_2d_h = (K @ points_3d.T).T  # (N, 3)
+    z = points_2d_h[:, 2:3]
+    z = np.where(z < 0.01, 0.01, z)  # Avoid division by zero
+    points_2d = points_2d_h[:, :2] / z
+    return points_2d.astype(np.int32)
+
+
+def draw_grasp_on_image(
+    img: np.ndarray,
+    grasp_pose: np.ndarray,
+    K: np.ndarray,
+    score: float,
+    grasp_index: int = 0,
+    collision_free: bool = True,
+    gripper_depth: float = 0.10,
+    gripper_width: float = 0.08,
+) -> np.ndarray:
+    """Draw a single grasp pose on an image.
+    
+    GraspGen convention:
+    - Origin at gripper wrist/base
+    - Z-axis points TOWARD object (approach direction)
+    - X-axis is finger opening direction
+    - Fingers are at +Z from origin
+    
+    Args:
+        img: BGR image to draw on
+        grasp_pose: 4x4 grasp pose in camera frame
+        K: 3x3 camera intrinsics
+        score: Grasp quality score (0-1)
+        grasp_index: Grasp rank for labeling (0 = best)
+        collision_free: Whether grasp is collision-free
+        gripper_depth: Gripper depth in meters
+        gripper_width: Gripper opening width in meters
+    """
+    color = get_color_from_score(score)
+    thickness = 2 if collision_free else 1
+    line_type = cv2.LINE_AA
+    
+    # Define gripper control points in gripper frame
+    # Origin at wrist, Z points toward object, fingers at +Z
+    wrist_stub = -0.05  # Draw arm stub behind wrist
+    finger_length = gripper_depth * 0.4  # Finger prong length
+    
+    control_points = np.array([
+        [0, 0, wrist_stub],                              # 0: Arm stub (behind wrist)
+        [0, 0, 0],                                        # 1: Wrist/base
+        [gripper_width/2, 0, 0],                          # 2: Right side of palm
+        [-gripper_width/2, 0, 0],                         # 3: Left side of palm
+        [gripper_width/2, 0, finger_length],              # 4: Right finger tip
+        [-gripper_width/2, 0, finger_length],             # 5: Left finger tip
+    ])
+    
+    # Transform to camera frame
+    R = grasp_pose[:3, :3]
+    t = grasp_pose[:3, 3]
+    points_cam = (R @ control_points.T).T + t
+    
+    # Check if points are in front of camera
+    if np.any(points_cam[:, 2] < 0.01):
+        return img
+    
+    # Project to 2D
+    pts_2d = project_points_to_image(points_cam, K)
+    
+    # Draw arm stub (approach axis behind gripper)
+    cv2.line(img, tuple(pts_2d[0]), tuple(pts_2d[1]), color, thickness, line_type)
+    
+    # Draw palm (horizontal bar at wrist connecting the two finger bases)
+    cv2.line(img, tuple(pts_2d[2]), tuple(pts_2d[3]), color, thickness + 1, line_type)
+    
+    # Draw fingers (from palm to fingertips) - open prongs, no connection at tips
+    cv2.line(img, tuple(pts_2d[2]), tuple(pts_2d[4]), color, thickness, line_type)  # Right finger
+    cv2.line(img, tuple(pts_2d[3]), tuple(pts_2d[5]), color, thickness, line_type)  # Left finger
+    
+    # Draw small circles at fingertips to make them visible
+    cv2.circle(img, tuple(pts_2d[4]), 3, color, -1)
+    cv2.circle(img, tuple(pts_2d[5]), 3, color, -1)
+    
+    # Draw grasp number label at wrist
+    label_pos = (int(pts_2d[1][0]) + 5, int(pts_2d[1][1]) - 5)
+    cv2.putText(img, str(grasp_index + 1), label_pos, 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
+    
+    return img
+
+
+def save_grasp_debug_visualization(
+    rgb: np.ndarray,
+    depth: np.ndarray,
+    mask: np.ndarray,
+    grasps: List[np.ndarray],
+    scores: List[float],
+    collision_free_mask: Optional[List[bool]],
+    K: np.ndarray,
+    request_id: str,
+    gripper_name: str,
+    logger,
+    max_grasps_to_draw: int = 20,
+) -> Optional[str]:
+    """Generate and save a debug visualization for grasp predictions.
+    
+    Creates a 3-panel composite: [RGB with grasps | Masked RGB | Depth colormap]
+    
+    Returns:
+        Path to saved image, or None if failed
+    """
+    try:
+        # Ensure RGB is in BGR format for OpenCV
+        if rgb.shape[2] == 3:
+            vis_img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        else:
+            vis_img = rgb.copy()
+        
+        # Sort grasps by score (best first)
+        if len(grasps) > 0 and len(scores) > 0:
+            indices = np.argsort(scores)[::-1]  # Descending
+            
+            # Draw top-N grasps (worst first so best are on top)
+            n_draw = min(max_grasps_to_draw, len(grasps))
+            for i in reversed(range(n_draw)):
+                idx = indices[i]
+                grasp = np.array(grasps[idx])
+                score = scores[idx]
+                collision_free = collision_free_mask[idx] if collision_free_mask else True
+                
+                # Normalize score to 0-1 range
+                score_norm = (score - min(scores)) / (max(scores) - min(scores) + 1e-6)
+                
+                draw_grasp_on_image(
+                    vis_img, grasp, K, score_norm,
+                    grasp_index=i,  # Pass the rank (0 = best)
+                    collision_free=collision_free,
+                    gripper_depth=0.10 if "robotiq" in gripper_name else 0.05,
+                    gripper_width=0.085 if "robotiq" in gripper_name else 0.03,
+                )
+        
+        # Add text overlay
+        cv2.putText(
+            vis_img, f"Grasps: {len(grasps)} ({gripper_name})",
+            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2
+        )
+        if len(scores) > 0:
+            cv2.putText(
+                vis_img, f"Best score: {max(scores):.3f}",
+                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
+            )
+        if collision_free_mask:
+            n_free = sum(collision_free_mask)
+            cv2.putText(
+                vis_img, f"Collision-free: {n_free}/{len(grasps)}",
+                (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2
+            )
+        
+        # Create masked RGB view
+        masked_rgb = rgb.copy()
+        if mask is not None and mask.shape[:2] == rgb.shape[:2]:
+            mask_3ch = np.stack([mask > 0] * 3, axis=-1)
+            masked_rgb = np.where(mask_3ch, rgb, (rgb * 0.3).astype(np.uint8))
+        masked_bgr = cv2.cvtColor(masked_rgb, cv2.COLOR_RGB2BGR)
+        
+        # Create depth colormap
+        d_valid = depth[depth > 0]
+        if d_valid.size > 0:
+            d_min, d_max = d_valid.min(), d_valid.max()
+            depth_norm = ((depth - d_min) / (d_max - d_min + 1e-6) * 255).clip(0, 255).astype(np.uint8)
+            depth_vis = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
+        else:
+            depth_vis = np.zeros_like(vis_img)
+        
+        # Resize panels to same height
+        h = vis_img.shape[0]
+        w = vis_img.shape[1]
+        
+        # Create 3-panel composite
+        composite = np.hstack([vis_img, masked_bgr, depth_vis])
+        
+        # Add panel labels
+        cv2.putText(composite, "Grasps", (w//2 - 40, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(composite, "Mask", (w + w//2 - 30, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(composite, "Depth", (2*w + w//2 - 35, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Save
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        vis_path = DEBUG_DIR / f"grasp_{request_id}_{timestamp}.png"
+        cv2.imwrite(str(vis_path), composite)
+        logger.info(f"Saved grasp debug visualization to {vis_path}")
+        
+        return str(vis_path)
+        
+    except Exception as e:
+        logger.warning(f"Grasp debug visualization failed: {e}")
+        return None
 
 # Configure logging
 LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
@@ -355,12 +576,32 @@ class GraspGenWorker(mp.Process):
         T_inv = tra.inverse_matrix(T_center)
         grasps_final = np.array([T_inv @ g for g in grasps_centered])
         
+        # Generate debug visualization if RGB is available
+        debug_path = None
+        if rgb is not None:
+            import uuid
+            request_id = str(uuid.uuid4())[:8]
+            debug_path = save_grasp_debug_visualization(
+                rgb=rgb,
+                depth=depth,
+                mask=mask,
+                grasps=grasps_final.tolist(),
+                scores=scores.tolist(),
+                collision_free_mask=collision_free_mask.tolist() if collision_free_mask is not None else None,
+                K=K,
+                request_id=request_id,
+                gripper_name=self.gripper_name,
+                logger=logger,
+                max_grasps_to_draw=20,
+            )
+        
         return {
             "grasps": grasps_final.tolist(),
             "scores": scores.tolist(),
             "collision_free_mask": collision_free_mask.tolist() if collision_free_mask is not None else None,
             "object_centroid": pc_mean.tolist(),
             "inference_time_ms": (time.time() - start_time) * 1000,
+            "debug_image_path": debug_path,
         }
 
 
@@ -401,6 +642,7 @@ class GraspResponse(BaseModel):
     gripper_type: str
     object_centroid: List[float] = Field(..., description="Object center in camera frame")
     inference_time_ms: float
+    debug_image_path: Optional[str] = Field(None, description="Path to debug visualization image")
 
 
 # Global worker
@@ -541,6 +783,7 @@ def generate_grasps(req: GraspRequest) -> GraspResponse:
         gripper_type=req.gripper_type,
         object_centroid=data["object_centroid"],
         inference_time_ms=data["inference_time_ms"],
+        debug_image_path=data.get("debug_image_path"),
     )
 
 

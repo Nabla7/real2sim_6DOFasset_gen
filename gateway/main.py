@@ -5,6 +5,7 @@ Main FastAPI application that exposes the /process endpoint
 and orchestrates the SAM3 -> SAM3D -> FoundationPose pipeline.
 """
 
+import base64
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -285,12 +286,32 @@ async def grasp(request: GraspRequest) -> GraspResponse:
             # First decode depth to get shape
             depth_bytes = base64.b64decode(request.depth_b64)
             num_pixels = len(depth_bytes) // 4
-            if num_pixels == 480 * 640:
-                depth_shape = [480, 640]
-            elif num_pixels == 720 * 1280:
-                depth_shape = [720, 1280]
+            
+            # Common resolutions lookup
+            RESOLUTIONS = {
+                480 * 640: [480, 640],
+                720 * 1280: [720, 1280],
+                1080 * 1920: [1080, 1920],
+                2160 * 3840: [2160, 3840],  # 4K
+            }
+            
+            if num_pixels in RESOLUTIONS:
+                depth_shape = RESOLUTIONS[num_pixels]
             else:
-                depth_shape = [480, 640]  # fallback
+                # Try to infer 16:9 aspect ratio
+                import math
+                h = int(math.sqrt(num_pixels * 9 / 16))
+                w = int(h * 16 / 9)
+                if h * w == num_pixels:
+                    depth_shape = [h, w]
+                else:
+                    # Last resort: try 4:3 aspect ratio
+                    h = int(math.sqrt(num_pixels * 3 / 4))
+                    w = int(h * 4 / 3)
+                    if h * w == num_pixels:
+                        depth_shape = [h, w]
+                    else:
+                        raise ValueError(f"Cannot determine depth shape for {num_pixels} pixels. Please send depth_shape explicitly.")
 
             graspgen_payload = {
                 "depth_b64": request.depth_b64,

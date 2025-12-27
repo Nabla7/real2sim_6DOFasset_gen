@@ -187,36 +187,23 @@ curl -X POST http://localhost:8080/process \
 - **Box-based** (`use_box_prompt=true`): Uses `bbox` as geometric prompt, ignores `label`
   - **Use this when YOLO-E labels are garbage** but bounding boxes are accurate
 
-**Mesh Download:**
-The response includes a `mesh_id` instead of embedded mesh data. Download the mesh separately:
-
-```bash
-# After receiving mesh_id from /process response
-curl http://localhost:8080/mesh/a3f2c91b-4e7d-4a1c-8b3e-123456789abc \
-  --output object.obj
-```
-
-Meshes are automatically decimated to ~1-5MB (down from 25-60MB) while preserving visual quality.
+**SAM3D scaling (default):**
+- Mesh reconstruction uses **internal scaling by default** (server ignores `depth_b64`/`K` for mesh scaling).
+- To enable depth+intrinsics pointmap scaling, run SAM3D with `SAM3D_DISABLE_POINTMAP_SCALING=0`.
 
 ---
 
 ### GET /mesh/{mesh_id} - Download Mesh Artifact
 
-**Download a generated 3D mesh by ID**
+Download a generated 3D mesh by ID. Meshes are automatically decimated to 1-5MB.
 
 ```bash
 curl http://localhost:8080/mesh/a3f2c91b-4e7d-4a1c-8b3e-123456789abc \
   --output bottle.obj
 ```
 
-**Response:**
-- Content-Type: `application/octet-stream`
-- Body: Raw OBJ file (1-5MB, decimated)
-
-**Features:**
-- Automatic mesh decimation (~50k triangles or 10% of original)
-- Cached on server for fast repeated downloads
-- Standard OBJ format compatible with all 3D tools
+- **Format:** OBJ (compatible with all 3D tools)
+- **Size:** 1-5MB (decimated from 25-60MB original)
 
 ---
 
@@ -225,7 +212,6 @@ curl http://localhost:8080/mesh/a3f2c91b-4e7d-4a1c-8b3e-123456789abc \
 **Direct grasp generation without mesh/pose reconstruction**
 
 ```bash
-# With text label
 curl -X POST http://localhost:8080/grasp \
   -H "Content-Type: application/json" \
   -d '{
@@ -238,19 +224,9 @@ curl -X POST http://localhost:8080/grasp \
     "filter_collisions": true,
     "gripper_type": "robotiq_2f_140"
   }'
-
-# With box-only (for YOLO-E garbage labels)
-curl -X POST http://localhost:8080/grasp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "image_rgb_b64": "iVBORw0KGgoAAAANS...",
-    "depth_b64": "AAAAAAAAAAAAAAAA...",
-    "K": [[615.0, 0, 320], [0, 615, 240], [0, 0, 1]],
-    "bbox": [120, 80, 200, 280],
-    "use_box_prompt": true,
-    "filter_collisions": true
-  }'
 ```
+
+Use `use_box_prompt: true` to ignore the label and segment by bounding box only.
 
 **Response:**
 ```json
@@ -262,15 +238,11 @@ curl -X POST http://localhost:8080/grasp \
       "score": 0.947,
       "collision_free": true
     },
-    {
-      "transform": [0.982, 0.174, -0.067, 0.14, ...],
-      "score": 0.932,
-      "collision_free": true
-    }
-    ... 98 more grasps
+    ...
   ],
   "gripper_type": "robotiq_2f_140",
-  "inference_time_ms": 850
+  "inference_time_ms": 850,
+  "debug_image_path": "/workspace/debug/grasp_abc123_20251227_120000.png"
 }
 ```
 
@@ -283,6 +255,9 @@ T = np.array(grasp["transform"]).reshape(4, 4)
 #      [R R R tz],
 #      [0 0 0 1 ]]
 ```
+
+**Debug Visualization:**
+GraspGen saves a debug image showing grasps overlaid on the RGB image. Check `debug_image_path` in the response or browse `/workspace/debug/`.
 
 ---
 
@@ -309,21 +284,9 @@ Expected timings on NVIDIA A100-80GB:
 
 | Scenario | Mode | Why |
 |----------|------|-----|
-| **YOLO-E detections** | `use_box_prompt=true` | YOLO-E labels are generic ("object_27"), but bboxes are accurate |
-| **Manual annotations** | `use_box_prompt=false` | Human-provided labels are descriptive ("red coffee mug") |
-| **Known objects** | `use_box_prompt=false` | Text helps SAM3 understand what to segment |
-| **Unknown objects** | `use_box_prompt=true` | Just segment whatever is in the box |
-
-**Example: YOLO-E Integration**
-```python
-# YOLO-E gives you: bbox=[120, 80, 200, 280], label="object_27" (useless!)
-response = requests.post("http://localhost:8080/grasp", json={
-    "bbox": [120, 80, 200, 280],
-    "use_box_prompt": True,  # Ignore the garbage label
-    "label": "",  # Optional, not used
-    ...
-})
-```
+| **YOLO-E / generic detectors** | `use_box_prompt=true` | Labels are often generic ("object_27"), but bboxes are accurate |
+| **Known objects** | `use_box_prompt=false` | Descriptive labels ("red coffee mug") help SAM3 segment precisely |
+| **Unknown objects** | `use_box_prompt=true` | Segment whatever is in the bounding box |
 
 ---
 

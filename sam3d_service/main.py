@@ -59,6 +59,16 @@ SAM3D_WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "sam3d-objects")
 SAM3D_CONFIG = os.path.join(SAM3D_WEIGHTS_PATH, "pipeline.yaml")
 OUTPUT_DIR = Path(os.getenv("MESH_OUTPUT_DIR", "/tmp/spatial_memory/meshes"))
 
+# If set, ignore depth_b64/K pointmap scaling and let SAM3D use its internal scaling.
+# Default: disabled (internal scaling) unless explicitly enabled.
+DISABLE_POINTMAP_SCALING = os.getenv("SAM3D_DISABLE_POINTMAP_SCALING", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "y",
+    "on",
+}
+
 # Pointmap validity thresholds (mask-aware)
 # If too few pixels inside the mask have valid depth, passing a pointmap tends to
 # produce badly scaled meshes and cascades into FoundationPose failures.
@@ -345,9 +355,15 @@ def reconstruct(req: ReconstructRequest) -> ReconstructResponse:
         mask_img = Image.open(io.BytesIO(mask_bytes)).convert("L")
         mask_np = np.array(mask_img) > 0
 
-        # Compute pointmap from depth if provided
+        # Compute pointmap from depth if provided (unless disabled)
         pointmap = None
-        if req.depth_b64 and req.K:
+        if DISABLE_POINTMAP_SCALING:
+            if req.depth_b64 or req.K:
+                logger.warning(
+                    "SAM3D pointmap scaling is DISABLED (SAM3D_DISABLE_POINTMAP_SCALING=1). "
+                    "Ignoring depth_b64/K and using internal SAM3D scaling."
+                )
+        elif req.depth_b64 and req.K:
             logger.info("Computing pointmap from RealSense depth...")
             depth_b64 = req.depth_b64.split(",", 1)[1] if "," in req.depth_b64 else req.depth_b64
             depth_bytes = base64.b64decode(depth_b64)

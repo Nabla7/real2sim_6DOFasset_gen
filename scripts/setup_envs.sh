@@ -1,6 +1,18 @@
 #!/bin/bash
 # Setup script for local development (without Docker)
 # Creates the conda environments with all dependencies
+#
+# Architecture support:
+#   - x86_64 (linux-64): Full support (all environments)
+#   - aarch64 (linux-aarch64): Partial support
+#       • gateway: ✅ Works
+#       • sam3: ✅ Works
+#       • sam3d-objects: ❌ Skipped (x86_64-only dependency spec)
+#       • foundationpose: ⚠️  May work with adjustments
+#       • GraspGen: ⚠️  May work with adjustments
+#
+# For ARM/aarch64 deployments:
+#   Recommended: Use Docker on x86_64 hardware, or run SAM3D remotely and set SAM3D_URL
 
 set -e
 
@@ -20,8 +32,21 @@ SERVICE_DIR="$(dirname "$SCRIPT_DIR")"
 WORKSPACE_DIR="$(dirname "$SERVICE_DIR")"
 THIRD_PARTY_DIR="$WORKSPACE_DIR/third_party"
 
+# Detect architecture
+ARCH="$(uname -m)"
+
 echo "Service directory: $SERVICE_DIR"
 echo "Third-party directory: $THIRD_PARTY_DIR"
+echo "Architecture: $ARCH"
+
+# Warn about ARM limitations
+if [ "$ARCH" != "x86_64" ]; then
+    echo ""
+    echo "⚠️  WARNING: Detected non-x86_64 architecture ($ARCH)"
+    echo "   Some environments (SAM3D) are not available for $ARCH and will be skipped."
+    echo "   For full functionality, use Docker on an x86_64 machine or run SAM3D remotely."
+    echo ""
+fi
 
 # ============================================
 # Clone third-party repositories if needed
@@ -93,7 +118,17 @@ fi
 # ============================================
 echo ""
 echo "=== Creating SAM3D environment ==="
-if conda env list | grep -q "^sam3d-objects "; then
+
+# SAM3D's environment spec (environments/default.yml) pins linux-64 (x86_64) packages
+# and cannot be installed on linux-aarch64. Skip on ARM architectures.
+if [ "$ARCH" != "x86_64" ]; then
+    echo "⚠️  SKIPPING SAM3D on $ARCH architecture"
+    echo "   SAM3D environment is x86_64-only (contains linux-64 package pins)."
+    echo "   Options:"
+    echo "     1. Run SAM3D in Docker on an x86_64 machine and point SAM3D_URL to it"
+    echo "     2. Use the full Docker deployment (all services together)"
+    echo ""
+elif conda env list | grep -q "^sam3d-objects "; then
     echo "Environment 'sam3d-objects' already exists. Skipping."
 else
     echo "This will take 10-15 minutes due to complex dependencies..."
@@ -228,20 +263,47 @@ fi
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "Environment names (match Docker):"
-echo "  • gateway"
-echo "  • sam3"
-echo "  • sam3d-objects"
-echo "  • foundationpose"
-echo "  • GraspGen"
+echo "Created environments:"
+echo "  ✅ gateway"
+echo "  ✅ sam3"
+if conda env list | grep -q "^sam3d-objects "; then
+    echo "  ✅ sam3d-objects"
+else
+    echo "  ⚠️  sam3d-objects (skipped on $ARCH)"
+fi
+if conda env list | grep -q "^foundationpose "; then
+    echo "  ✅ foundationpose"
+else
+    echo "  ⚠️  foundationpose (not created)"
+fi
+if conda env list | grep -q "^GraspGen "; then
+    echo "  ✅ GraspGen"
+else
+    echo "  ⚠️  GraspGen (not created)"
+fi
 echo ""
+
+if [ "$ARCH" != "x86_64" ]; then
+    echo "⚠️  Architecture: $ARCH"
+    echo "   This architecture has limited support. For full functionality:"
+    echo "     • Use Docker on x86_64 hardware (recommended)"
+    echo "     • Run SAM3D service separately on x86_64 and set SAM3D_URL"
+    echo ""
+fi
+
 echo "To run services locally, use scripts/start_all.sh"
 echo "Or manually:"
 echo "  Gateway:        conda activate gateway && python -m gateway.main"
 echo "  SAM3:           conda activate sam3 && python -m sam3_service.main"
-echo "  SAM3D:          conda activate sam3d-objects && python -m sam3d_service.main"
-echo "  FoundationPose: conda activate foundationpose && python -m foundationpose_service.main"
-echo "  GraspGen:       conda activate GraspGen && cd $THIRD_PARTY_DIR/GraspGen && python scripts/demo_object_mesh.py --help"
+if conda env list | grep -q "^sam3d-objects "; then
+    echo "  SAM3D:          conda activate sam3d-objects && python -m sam3d_service.main"
+fi
+if conda env list | grep -q "^foundationpose "; then
+    echo "  FoundationPose: conda activate foundationpose && python -m foundationpose_service.main"
+fi
+if conda env list | grep -q "^GraspGen "; then
+    echo "  GraspGen:       conda activate GraspGen && cd $THIRD_PARTY_DIR/GraspGen && python scripts/demo_object_mesh.py --help"
+fi
 echo ""
 echo "Make sure to set environment variables:"
 echo "  export WEIGHTS_DIR=$WORKSPACE_DIR/weights"

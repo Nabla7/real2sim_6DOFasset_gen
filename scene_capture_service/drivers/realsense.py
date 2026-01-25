@@ -2,6 +2,7 @@
 
 from .base import CameraDriver
 import pyrealsense2 as rs
+import numpy as np
 import threading
 
 
@@ -25,9 +26,12 @@ class RealSenseDriver(CameraDriver):
         with self._lock:
             frames = self.pipe.wait_for_frames()
             color_frame = frames.get_color_frame()
-            # depth_frame = frames.get_depth_frame()
-            # infrared_frame = frames.get_infrared_frame(1)
-            return color_frame.get_data().tobytes()
+            if not color_frame:
+                raise RuntimeError("Failed to capture color frame")
+
+            # Convert frame to numpy array then to bytes
+            frame_data = np.asanyarray(color_frame.get_data())
+            return frame_data.tobytes()
 
     def get_intrinsics(self) -> dict:
         return (

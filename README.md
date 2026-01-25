@@ -242,7 +242,7 @@ Use `use_box_prompt: true` to ignore the label and segment by bounding box only.
   ],
   "gripper_type": "robotiq_2f_140",
   "inference_time_ms": 850,
-  "debug_image_path": "/workspace/debug/grasp_abc123_20251227_120000.png"
+  "debug_image_path": "debug/grasp_abc123_20251227_120000.png"
 }
 ```
 
@@ -257,7 +257,7 @@ T = np.array(grasp["transform"]).reshape(4, 4)
 ```
 
 **Debug Visualization:**
-GraspGen saves a debug image showing grasps overlaid on the RGB image. Check `debug_image_path` in the response or browse `/workspace/debug/`.
+GraspGen saves a debug image showing grasps overlaid on the RGB image. Check `debug_image_path` in the response or browse `debug/`.
 
 ---
 
@@ -404,7 +404,7 @@ See [`DEPLOYMENT.md`](DEPLOYMENT.md) for complete deployment guide.
 ./scripts/setup_envs.sh
 
 # 2. Download GraspGen models
-cd /workspace/third_party/GraspGen
+cd third_party/GraspGen
 git clone https://huggingface.co/adithyamurali/GraspGenModels
 
 # 3. Start all services

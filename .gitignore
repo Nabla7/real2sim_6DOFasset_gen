@@ -1,0 +1,14 @@
+# Third-party repos cloned by scripts/setup_envs.sh (keep inside repo, but not committed)
+/third_party/
+
+# Local outputs / artifacts
+/logs/
+/debug/
+/spatial_memory/
+
+# Python cache
+**/__pycache__/
+*.pyc
+
+# OS/editor noise
+.DS_Store

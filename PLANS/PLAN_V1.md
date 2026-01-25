@@ -17,16 +17,15 @@ Expand the existing object processing pipeline into a full **real2sim** system t
 ## How This Repo Works (Important!)
 
 ```
-workspace/
-├── dimos_hosted_services/    # THIS REPO - thin FastAPI wrappers
-│   ├── gateway/
-│   ├── sam3_service/
-│   ├── sam3d_service/
-│   ├── foundationpose_service/
-│   ├── graspgen_service/
-│   ├── requirements/         # Minimal deps (fastapi, uvicorn, pydantic)
-│   └── scripts/
-│       └── setup_envs.sh     # Clones third-party repos + creates conda envs
+real2sim_6DOFasset_gen/       # THIS REPO - thin FastAPI wrappers
+├── gateway/
+├── sam3_service/
+├── sam3d_service/
+├── foundationpose_service/
+├── graspgen_service/
+├── requirements/             # Minimal deps (fastapi, uvicorn, pydantic)
+├── scripts/
+│   └── setup_envs.sh         # Clones third-party repos + creates conda envs
 │
 ├── third_party/              # CLONED BY setup_envs.sh (NOT in git)
 │   ├── sam3/                 # facebook/sam3
@@ -34,7 +33,7 @@ workspace/
 │   ├── FoundationPose/       # NVlabs/FoundationPose
 │   └── GraspGen/             # NVlabs/GraspGen
 │
-└── weights/                  # Model weights (mounted, NOT in git)
+└── weights/                  # Model weights (NOT in git)
 ```
 
 **Key pattern:** Service wrappers import from `third_party/` repos. The heavy ML code lives there.

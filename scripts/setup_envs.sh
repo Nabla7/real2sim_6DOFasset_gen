@@ -29,8 +29,31 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_DIR="$(dirname "$SCRIPT_DIR")"
-WORKSPACE_DIR="$(dirname "$SERVICE_DIR")"
-THIRD_PARTY_DIR="$WORKSPACE_DIR/third_party"
+REPO_DIR="$SERVICE_DIR"
+
+# Default locations are repo-local to keep the workspace self-contained.
+# You can override them by exporting THIRD_PARTY_DIR / WEIGHTS_DIR before running.
+THIRD_PARTY_DIR_DEFAULT="$REPO_DIR/third_party"
+WEIGHTS_DIR_DEFAULT="$REPO_DIR/weights"
+
+# Detect whether caller explicitly set THIRD_PARTY_DIR (even if empty)
+THIRD_PARTY_DIR_ENV_SET=0
+if [ -n "${THIRD_PARTY_DIR+x}" ]; then
+    THIRD_PARTY_DIR_ENV_SET=1
+fi
+
+THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-$THIRD_PARTY_DIR_DEFAULT}"
+WEIGHTS_DIR="${WEIGHTS_DIR:-$WEIGHTS_DIR_DEFAULT}"
+
+# Backwards-compat migration: older versions used a sibling directory (../third_party).
+# If the user didn't override THIRD_PARTY_DIR and the old folder exists, move it in-repo.
+OLD_THIRD_PARTY_DIR="$(dirname "$REPO_DIR")/third_party"
+if [ "$THIRD_PARTY_DIR_ENV_SET" -eq 0 ] && [ -d "$OLD_THIRD_PARTY_DIR" ] && [ ! -d "$THIRD_PARTY_DIR" ]; then
+    echo ""
+    echo "=== Migrating third-party directory into repo ==="
+    echo "Moving: $OLD_THIRD_PARTY_DIR -> $THIRD_PARTY_DIR"
+    mv "$OLD_THIRD_PARTY_DIR" "$THIRD_PARTY_DIR"
+fi
 
 # Detect architecture
 ARCH="$(uname -m)"
@@ -250,13 +273,13 @@ fi
 # ============================================
 echo ""
 echo "=== Checking FoundationPose weights ==="
-if [ -d "$WORKSPACE_DIR/weights/foundationpose" ]; then
+if [ -d "$WEIGHTS_DIR/foundationpose" ]; then
     echo "Copying FoundationPose weights..."
     mkdir -p "$THIRD_PARTY_DIR/FoundationPose/weights"
-    cp -r "$WORKSPACE_DIR/weights/foundationpose/"* "$THIRD_PARTY_DIR/FoundationPose/weights/"
+    cp -r "$WEIGHTS_DIR/foundationpose/"* "$THIRD_PARTY_DIR/FoundationPose/weights/"
     echo "✅ Weights copied"
 else
-    echo "⚠️  WARNING: $WORKSPACE_DIR/weights/foundationpose not found"
+    echo "⚠️  WARNING: $WEIGHTS_DIR/foundationpose not found"
     echo "   FoundationPose will fail without weights!"
 fi
 
@@ -306,7 +329,7 @@ if conda env list | grep -q "^GraspGen "; then
 fi
 echo ""
 echo "Make sure to set environment variables:"
-echo "  export WEIGHTS_DIR=$WORKSPACE_DIR/weights"
+echo "  export WEIGHTS_DIR=$WEIGHTS_DIR"
 echo "  export SAM3D_PATH=$THIRD_PARTY_DIR/sam-3d-objects"
 echo "  export FOUNDATIONPOSE_PATH=$THIRD_PARTY_DIR/FoundationPose"
 echo "  export PYOPENGL_PLATFORM=egl  # For GraspGen offscreen rendering"

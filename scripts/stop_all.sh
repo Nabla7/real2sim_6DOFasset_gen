@@ -1,7 +1,9 @@
 #!/bin/bash
 # Stop all spatial memory services
 
-LOG_DIR=/workspace/logs
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+LOG_DIR="${LOG_DIR:-$REPO_DIR/logs}"
 
 echo "=== Stopping Spatial Memory Services ==="
 

@@ -29,8 +29,20 @@ from fastapi import FastAPI, HTTPException
 from PIL import Image
 from pydantic import BaseModel
 
+# --- Paths (repo-local by default; Docker still works) ---
+REPO_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", str(REPO_DIR)))
+THIRD_PARTY_DIR = Path(os.getenv("THIRD_PARTY_DIR", str(WORKSPACE_DIR / "third_party")))
+DEFAULT_LOG_DIR = Path("/tmp/spatial_memory/logs")
+DEFAULT_DEBUG_DIR = Path("/tmp/spatial_memory/debug")
+
 # Configure logging
-LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
+LOG_DIR = Path(
+    os.getenv(
+        "LOG_DIR",
+        str(DEFAULT_LOG_DIR if DEFAULT_LOG_DIR.exists() else WORKSPACE_DIR / "logs"),
+    )
+)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -57,10 +69,19 @@ def _configure_logging(name: str = "foundationpose_service") -> logging.Logger:
 logger = _configure_logging()
 
 # Configuration
-WEIGHTS_DIR = os.getenv("WEIGHTS_DIR", "/weights")
+DEFAULT_WEIGHTS_DIR = "/weights" if Path("/weights").exists() else str(WORKSPACE_DIR / "weights")
+WEIGHTS_DIR = os.getenv("WEIGHTS_DIR", DEFAULT_WEIGHTS_DIR)
 FP_WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "foundationpose")
 FP_REFINER_DIR = os.path.join(FP_WEIGHTS_PATH, "2023-10-28-18-33-37")
 FP_SCORER_DIR = os.path.join(FP_WEIGHTS_PATH, "2024-01-11-20-02-45")
+
+DEBUG_DIR = Path(
+    os.getenv(
+        "DEBUG_DIR",
+        str(DEFAULT_DEBUG_DIR if DEFAULT_DEBUG_DIR.exists() else WORKSPACE_DIR / "debug"),
+    )
+)
+DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # --- Worker Process ---
@@ -83,7 +104,7 @@ class FoundationPoseWorker(mp.Process):
         worker_logger.info("Worker started. Initializing FoundationPose predictors...")
 
         # Add FoundationPose to path
-        fp_path = os.getenv("FOUNDATIONPOSE_PATH", "/app/third_party/FoundationPose")
+        fp_path = os.getenv("FOUNDATIONPOSE_PATH", str(THIRD_PARTY_DIR / "FoundationPose"))
         if os.path.exists(fp_path) and fp_path not in sys.path:
             sys.path.insert(0, fp_path)
 
@@ -317,7 +338,7 @@ class FoundationPoseWorker(mp.Process):
         """Generate and save a debug visualization composite image.
 
         Creates a 4-panel composite: [Original RGB | Masked RGB | Depth colormap | Pose overlay]
-        Saves to /workspace/debug/{object_id}.png
+        Saves to DEBUG_DIR/{object_id}.png
         """
         try:
             import Utils
@@ -363,9 +384,7 @@ class FoundationPoseWorker(mp.Process):
             composite = np.hstack([rgb, masked_rgb, depth_vis, vis])
 
             # Save to debug folder
-            debug_dir = Path("/workspace/debug")
-            debug_dir.mkdir(parents=True, exist_ok=True)
-            vis_path = debug_dir / f"{object_id}.png"
+            vis_path = DEBUG_DIR / f"{object_id}.png"
 
             # Convert BGR -> RGB for saving (imageio expects RGB)
             imageio.imwrite(str(vis_path), composite[..., ::-1])

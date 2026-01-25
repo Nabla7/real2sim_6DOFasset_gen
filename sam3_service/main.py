@@ -25,8 +25,18 @@ from fastapi import FastAPI, HTTPException
 from PIL import Image
 from pydantic import BaseModel
 
+# --- Paths (repo-local by default; Docker still works) ---
+REPO_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", str(REPO_DIR)))
+DEFAULT_LOG_DIR = Path("/tmp/spatial_memory/logs")
+
 # Configure logging
-LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
+LOG_DIR = Path(
+    os.getenv(
+        "LOG_DIR",
+        str(DEFAULT_LOG_DIR if DEFAULT_LOG_DIR.exists() else WORKSPACE_DIR / "logs"),
+    )
+)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -53,7 +63,8 @@ def _configure_logging() -> logging.Logger:
 logger = _configure_logging()
 
 # Configuration from environment
-WEIGHTS_DIR = os.getenv("WEIGHTS_DIR", "/weights")
+DEFAULT_WEIGHTS_DIR = "/weights" if Path("/weights").exists() else str(WORKSPACE_DIR / "weights")
+WEIGHTS_DIR = os.getenv("WEIGHTS_DIR", DEFAULT_WEIGHTS_DIR)
 SAM3_WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "sam3")
 SAM3_CHECKPOINT = os.path.join(SAM3_WEIGHTS_PATH, "sam3.pt")
 SAM3_CONFIG = os.path.join(SAM3_WEIGHTS_PATH, "config.json")

@@ -29,8 +29,18 @@ from .config import (
 )
 from .pipeline import get_pipeline, compute_iou
 
+# --- Paths (repo-local by default; Docker still works) ---
+REPO_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", str(REPO_DIR)))
+DEFAULT_LOG_DIR = Path("/tmp/spatial_memory/logs")
+
 # Configure logging
-LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
+LOG_DIR = Path(
+    os.getenv(
+        "LOG_DIR",
+        str(DEFAULT_LOG_DIR if DEFAULT_LOG_DIR.exists() else WORKSPACE_DIR / "logs"),
+    )
+)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("spatial_memory.gateway")

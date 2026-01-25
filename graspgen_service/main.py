@@ -29,7 +29,19 @@ from pydantic import BaseModel, Field
 
 # --- Debug Visualization Utilities ---
 
-DEBUG_DIR = Path(os.getenv("DEBUG_DIR", "/workspace/debug"))
+# --- Paths (repo-local by default; Docker still works) ---
+REPO_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", str(REPO_DIR)))
+THIRD_PARTY_DIR = Path(os.getenv("THIRD_PARTY_DIR", str(WORKSPACE_DIR / "third_party")))
+DEFAULT_LOG_DIR = Path("/tmp/spatial_memory/logs")
+DEFAULT_DEBUG_DIR = Path("/tmp/spatial_memory/debug")
+
+DEBUG_DIR = Path(
+    os.getenv(
+        "DEBUG_DIR",
+        str(DEFAULT_DEBUG_DIR if DEFAULT_DEBUG_DIR.exists() else WORKSPACE_DIR / "debug"),
+    )
+)
 DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -247,7 +259,12 @@ def save_grasp_debug_visualization(
         return None
 
 # Configure logging
-LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
+LOG_DIR = Path(
+    os.getenv(
+        "LOG_DIR",
+        str(DEFAULT_LOG_DIR if DEFAULT_LOG_DIR.exists() else WORKSPACE_DIR / "logs"),
+    )
+)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -274,7 +291,7 @@ def _configure_logging(name: str = "graspgen_service") -> logging.Logger:
 logger = _configure_logging()
 
 # Configuration
-GRASPGEN_PATH = os.getenv("GRASPGEN_PATH", "/workspace/third_party/GraspGen")
+GRASPGEN_PATH = os.getenv("GRASPGEN_PATH", str(THIRD_PARTY_DIR / "GraspGen"))
 DEFAULT_GRIPPER = os.getenv("DEFAULT_GRIPPER", "robotiq_2f_140")
 
 
@@ -297,7 +314,7 @@ class GraspGenWorker(mp.Process):
         worker_logger.info(f"Worker process started for gripper: {self.gripper_name}")
 
         # Add GraspGen to path
-        graspgen_path = os.getenv("GRASPGEN_PATH", "/workspace/third_party/GraspGen")
+        graspgen_path = os.getenv("GRASPGEN_PATH", str(THIRD_PARTY_DIR / "GraspGen"))
         if os.path.exists(graspgen_path) and graspgen_path not in sys.path:
             sys.path.insert(0, graspgen_path)
 
@@ -352,7 +369,7 @@ class GraspGenWorker(mp.Process):
 
     def _get_gripper_config_path(self, gripper_name: str) -> str:
         """Get path to gripper configuration YAML file."""
-        graspgen_path = os.getenv("GRASPGEN_PATH", "/workspace/third_party/GraspGen")
+        graspgen_path = os.getenv("GRASPGEN_PATH", str(THIRD_PARTY_DIR / "GraspGen"))
         
         # Try to find checkpoints in GraspGenModels directory
         models_dir = os.path.join(graspgen_path, "GraspGenModels", "checkpoints")

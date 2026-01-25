@@ -26,8 +26,19 @@ from fastapi import FastAPI, HTTPException
 from PIL import Image
 from pydantic import BaseModel
 
+# --- Paths (repo-local by default; Docker still works) ---
+REPO_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", str(REPO_DIR)))
+THIRD_PARTY_DIR = Path(os.getenv("THIRD_PARTY_DIR", str(WORKSPACE_DIR / "third_party")))
+DEFAULT_LOG_DIR = Path("/tmp/spatial_memory/logs")
+
 # Configure logging
-LOG_DIR = Path(os.getenv("LOG_DIR", "/workspace/logs"))
+LOG_DIR = Path(
+    os.getenv(
+        "LOG_DIR",
+        str(DEFAULT_LOG_DIR if DEFAULT_LOG_DIR.exists() else WORKSPACE_DIR / "logs"),
+    )
+)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -54,7 +65,8 @@ def _configure_logging(name: str = "sam3d_service") -> logging.Logger:
 logger = _configure_logging()
 
 # Configuration
-WEIGHTS_DIR = os.getenv("WEIGHTS_DIR", "/weights")
+DEFAULT_WEIGHTS_DIR = "/weights" if Path("/weights").exists() else str(WORKSPACE_DIR / "weights")
+WEIGHTS_DIR = os.getenv("WEIGHTS_DIR", DEFAULT_WEIGHTS_DIR)
 SAM3D_WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "sam3d-objects")
 SAM3D_CONFIG = os.path.join(SAM3D_WEIGHTS_PATH, "pipeline.yaml")
 OUTPUT_DIR = Path(os.getenv("MESH_OUTPUT_DIR", "/tmp/spatial_memory/meshes"))
@@ -129,7 +141,7 @@ class InferenceWorker(mp.Process):
         worker_logger.info("Worker process started. Initializing SAM 3D pipeline...")
 
         # Add SAM3D to path (following official demo.py pattern)
-        sam3d_path = os.getenv("SAM3D_PATH", "/workspace/third_party/sam-3d-objects")
+        sam3d_path = os.getenv("SAM3D_PATH", str(THIRD_PARTY_DIR / "sam-3d-objects"))
         notebook_path = os.path.join(sam3d_path, "notebook")
         if os.path.exists(notebook_path) and notebook_path not in sys.path:
             sys.path.insert(0, notebook_path)

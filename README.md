@@ -403,6 +403,9 @@ See [`DEPLOYMENT.md`](DEPLOYMENT.md) for complete deployment guide.
 # 1. Clone third-party repos and setup environments
 ./scripts/setup_envs.sh
 
+# 1b. Build COLMAP from source (recommended on Ubuntu 22.04 for CUDA support)
+./scripts/build_colmap.sh
+
 # 2. Download GraspGen models
 cd third_party/GraspGen
 git clone https://huggingface.co/adithyamurali/GraspGenModels

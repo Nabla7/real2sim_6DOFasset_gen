@@ -248,7 +248,7 @@ New repos to clone in `setup_envs.sh`:
 | Service | Third-Party | How to Get |
 |---------|-------------|------------|
 | Scene Capture | pyrealsense2 | `pip install pyrealsense2` |
-| COLMAP | colmap binary | `apt-get install colmap` or conda |
+| COLMAP | COLMAP (source) | `git clone https://github.com/colmap/colmap.git` (then build; see `scripts/build_colmap.sh`) |
 | Neural Recon | 3dgrut | `git clone https://github.com/nv-tlabs/3dgrut.git` |
 | Scene Composer | usd-core | `pip install usd-core` |
 

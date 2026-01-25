@@ -98,6 +98,18 @@ if [ ! -d "$THIRD_PARTY_DIR/GraspGen" ]; then
     git clone https://github.com/NVlabs/GraspGen.git "$THIRD_PARTY_DIR/GraspGen"
 fi
 
+# NuRec / 3DGUT (3dgrut) - used by neural_recon_service (planned)
+if [ ! -d "$THIRD_PARTY_DIR/3dgrut" ]; then
+    echo "Cloning 3dgrut (NuRec/3DGUT)..."
+    git clone --recursive https://github.com/nv-tlabs/3dgrut.git "$THIRD_PARTY_DIR/3dgrut"
+fi
+
+# COLMAP (SfM) - recommended to build from source on Ubuntu 22.04 for proper CUDA support
+if [ ! -d "$THIRD_PARTY_DIR/colmap" ]; then
+    echo "Cloning COLMAP..."
+    git clone https://github.com/colmap/colmap.git "$THIRD_PARTY_DIR/colmap"
+fi
+
 # ============================================
 # Gateway environment
 # ============================================

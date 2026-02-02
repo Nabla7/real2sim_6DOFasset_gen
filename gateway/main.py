@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+import aiohttp
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -26,8 +27,12 @@ from .config import (
     SAM3_TIMEOUT,
     GRASPGEN_URL,
     GRASPGEN_TIMEOUT,
+    SCENE_CAPTURE_TIMEOUT,
+    SCENE_CAPTURE_URL,
 )
 from .pipeline import get_pipeline, compute_iou
+from .scene_pipeline import get_scene_pipeline
+from shared.jobs import read_status
 
 # --- Paths (repo-local by default; Docker still works) ---
 REPO_DIR = Path(__file__).resolve().parents[1]
@@ -155,6 +160,7 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
     logger.info("Starting Spatial Memory Gateway...")
     pipeline = await get_pipeline()
+    await get_scene_pipeline()
     logger.info("Pipeline workers ready")
     yield
     logger.info("Shutting down Spatial Memory Gateway...")
@@ -360,6 +366,100 @@ async def grasp(request: GraspRequest) -> GraspResponse:
     except Exception as e:
         logger.error(f"Grasp pipeline failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/scene/reconstruct")
+async def scene_reconstruct(
+    video: UploadFile | None = File(None),
+    video_path: Optional[str] = Form(None),
+    run_id: Optional[str] = Form(None),
+    fps: float = Form(3.0),
+    width: int = Form(1920),
+    format: str = Form("jpg"),
+    jpeg_quality: int = Form(2),
+    dedupe: bool = Form(False),
+    scene: Optional[float] = Form(None),
+    use_gpu: bool = Form(True),
+    max_image_size: int = Form(2000),
+    overlap: int = Form(10),
+    single_camera: bool = Form(True),
+    model_id: int = Form(0),
+    config_name: str = Form("apps/colmap_3dgut_mcmc.yaml"),
+    experiment_name: Optional[str] = Form(None),
+    overrides: Optional[str] = Form(None),
+    export: bool = Form(False),
+    export_usdz: bool = Form(True),
+    render: bool = Form(False),
+) -> Dict[str, Any]:
+    """
+    Scene reconstruction pipeline (frames -> COLMAP -> 3DGUT).
+
+    Accepts either a video upload or a video_path that is already accessible on disk.
+    """
+    pipeline = await get_scene_pipeline()
+    extra_overrides = [o for o in (overrides or "").split(",") if o]
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SCENE_CAPTURE_URL}/runs/create",
+            json={"run_id": run_id},
+            timeout=aiohttp.ClientTimeout(total=SCENE_CAPTURE_TIMEOUT),
+        ) as resp:
+            if resp.status != 200:
+                error = await resp.text()
+                raise HTTPException(status_code=500, detail=f"scene capture create failed: {error}")
+            result = await resp.json()
+            run_id = result.get("run_id", run_id)
+
+        if video is not None:
+            form = aiohttp.FormData()
+            form.add_field("file", await video.read(), filename=video.filename or "video.mov")
+            async with session.post(
+                f"{SCENE_CAPTURE_URL}/runs/{run_id}/upload_video",
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=SCENE_CAPTURE_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    raise HTTPException(status_code=500, detail=f"video upload failed: {error}")
+                await resp.json()
+
+    submit_request = {
+        "run_id": run_id,
+        "run_created": True,
+        "video_path": video_path,
+        "fps": fps,
+        "width": width,
+        "format": format,
+        "jpeg_quality": jpeg_quality,
+        "dedupe": dedupe,
+        "scene": scene,
+        "use_gpu": use_gpu,
+        "max_image_size": max_image_size,
+        "overlap": overlap,
+        "single_camera": single_camera,
+        "model_id": model_id,
+        "config_name": config_name,
+        "experiment_name": experiment_name,
+        "overrides": extra_overrides,
+        "export": export,
+        "export_usdz": export_usdz,
+        "render": render,
+    }
+
+    run_id = await pipeline.submit(submit_request)
+    return {"run_id": run_id, "status_url": f"/scene/jobs/{run_id}"}
+
+
+@app.get("/scene/jobs/{run_id}")
+async def scene_job_status(run_id: str) -> Dict[str, Any]:
+    return read_status(run_id)
+
+
+@app.get("/scene/jobs/{run_id}/artifacts")
+async def scene_job_artifacts(run_id: str) -> Dict[str, Any]:
+    status = read_status(run_id)
+    return {"run_id": run_id, "artifacts": status.get("artifacts", {})}
 
 
 if __name__ == "__main__":

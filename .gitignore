@@ -5,6 +5,7 @@
 /logs/
 /debug/
 /spatial_memory/
+/data/
 
 # Python cache
 **/__pycache__/

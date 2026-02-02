@@ -77,6 +77,27 @@ conda run -n GraspGen --no-capture-output \
   python -m graspgen_service.main >> "$LOG_DIR/graspgen.log" 2>&1 &
 echo $! > "$LOG_DIR/graspgen.pid"
 
+echo "Starting Scene Capture..."
+conda run -n gateway --no-capture-output \
+  env PYTHONPATH="$REPO_DIR" \
+      LOG_DIR=$LOG_DIR \
+  python -m scene_capture_service.main >> "$LOG_DIR/scene_capture.log" 2>&1 &
+echo $! > "$LOG_DIR/scene_capture.pid"
+
+echo "Starting COLMAP Service..."
+conda run -n gateway --no-capture-output \
+  env PYTHONPATH="$REPO_DIR" \
+      LOG_DIR=$LOG_DIR \
+  python -m colmap_service.main >> "$LOG_DIR/colmap.log" 2>&1 &
+echo $! > "$LOG_DIR/colmap.pid"
+
+echo "Starting Neural Recon Service..."
+conda run -n gateway --no-capture-output \
+  env PYTHONPATH="$REPO_DIR" \
+      LOG_DIR=$LOG_DIR \
+  python -m neural_recon_service.main >> "$LOG_DIR/neural_recon.log" 2>&1 &
+echo $! > "$LOG_DIR/neural_recon.pid"
+
 echo ""
 echo "All services started. Waiting for initialization..."
 sleep 20
@@ -89,9 +110,13 @@ SERVICES[8080]="Gateway"
 SERVICES[8091]="SAM3"
 SERVICES[8092]="SAM3D"
 SERVICES[8093]="FoundationPose"
+SERVICES[8094]="GraspGen"
+SERVICES[8095]="SceneCapture"
+SERVICES[8096]="COLMAP"
+SERVICES[8097]="NeuralRecon"
 
 ALL_OK=true
-for port in 8080 8091 8092 8093; do
+for port in 8080 8091 8092 8093 8094 8095 8096 8097; do
   if curl -sf http://localhost:$port/health > /dev/null 2>&1; then
     echo "✓ ${SERVICES[$port]} (port $port) - OK"
   else

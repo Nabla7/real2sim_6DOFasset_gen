@@ -406,6 +406,9 @@ See [`DEPLOYMENT.md`](DEPLOYMENT.md) for complete deployment guide.
 # 1b. Build COLMAP from source (recommended on Ubuntu 22.04 for CUDA support)
 ./scripts/build_colmap.sh
 
+# 1c. (Optional) Extract frames from a video for SfM/COLMAP
+./scripts/preprocess/extract_frames.sh /path/to/video.mov --fps 3 --dedupe
+
 # 2. Download GraspGen models
 cd third_party/GraspGen
 git clone https://huggingface.co/adithyamurali/GraspGenModels

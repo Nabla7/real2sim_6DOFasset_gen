@@ -35,6 +35,9 @@ stop_service() {
 }
 
 # Stop services in reverse order (GraspGen first, Gateway last)
+stop_service "neural_recon" 8097
+stop_service "colmap" 8096
+stop_service "scene_capture" 8095
 stop_service "graspgen" 8094
 stop_service "foundationpose" 8093
 stop_service "sam3d" 8092
@@ -44,7 +47,7 @@ stop_service "gateway" 8080
 # Also kill any remaining python processes on these ports
 echo ""
 echo "Checking for remaining processes on service ports..."
-for port in 8080 8091 8092 8093 8094; do
+for port in 8080 8091 8092 8093 8094 8095 8096 8097; do
   pid=$(lsof -ti :$port 2>/dev/null)
   if [ -n "$pid" ]; then
     echo "  Killing process on port $port (PID: $pid)"
